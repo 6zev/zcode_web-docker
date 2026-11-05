@@ -190,6 +190,12 @@ jobs:
           docker ps -a || true
           docker logs zcode-smoke 2>&1 | tail -200 || true
 
+      - name: 清理本地镜像(省 runner 磁盘)
+        if: steps.cfg.outputs.smoke == 'true'
+        run: |
+          docker rm -f zcode-smoke 2>/dev/null || true
+          docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "zcode_web_docker" | xargs -r docker rmi -f 2>/dev/null || true
+
       - name: 构建摘要
         if: always()
         run: |

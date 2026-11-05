@@ -1,7 +1,10 @@
-# 构建上下文里只留源码；真正的依赖在构建阶段安装
+# 构建上下文里只留源码与构建脚本；真正的依赖在构建阶段安装(见 Dockerfile)
+#
+# 注意：Dockerfile / docker-entrypoint.sh / zcode-preflight.sh 必须留在上下文里，
+# 否则 「本地检出」构建方式(COPY . /app/)与自检脚本会缺文件(CI 上已踩过)。
 .git
-.gitignore
 .dsh-meow
+.dockerignore
 node_modules
 **/node_modules
 **/dist
@@ -12,8 +15,3 @@ node_modules
 .env
 .env.local
 .env.*.local
-VERIFY-NOTES.md
-Dockerfile*
-docker-compose.yml
-.dockerignore
-README.md
