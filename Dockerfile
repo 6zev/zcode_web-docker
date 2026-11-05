@@ -132,14 +132,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ZCODE_AGENT_SERVER_COMMAND=/app/agent/zcode.cjs \
     ZCODE_AGENT_SERVER_ARGS_JSON='["app-server","--stdio"]' \
     ZCODE_WORKSPACE=/workspace \
-    ZCODE_SERVER_WORKSPACE=/workspace
+    ZCODE_SERVER_WORKSPACE=/workspace \
+    ZCODE_APP_UID=${APP_UID} \
+    ZCODE_APP_GID=${APP_GID} \
+    ZCODE_FIX_OWNERSHIP=1 \
+    ZCODE_DROP_PRIVILEGES=1
 
 # hadolint ignore=DL3008
 RUN set -eux; \
     apt-get update -qq; \
     apt-get install -y --no-install-recommends \
       bash ca-certificates curl git openssh-client \
-      procps tini; \
+      procps tini util-linux; \
     rm -rf /var/lib/apt/lists/*; \
     groupmod -o -g "${APP_GID}" node; \
     usermod -o -u "${APP_UID}" -g "${APP_GID}" -d /data -s /bin/bash -m node

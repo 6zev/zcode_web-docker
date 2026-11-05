@@ -50,3 +50,4 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 - 容器需能访问 `zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`(登录与推理);不通时给容器配 `HTTPS_PROXY`。
 - 只用 Docker 跑镜像:**不需要**本地 Node/pnpm。要自己构建镜像:构建机需能出网,首次构建约 10–25 分钟。
 - 卷 `/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/workspace` 是 ZCode 的默认工作目录。
+- 若把宿主机上**新建**的空目录 bind mount 进来,先 `sudo chown -R 1000:1000 <目录>`(或直接用命名卷 `-v zcode-data:/data`,或 `--user root` 让入口脚本自动修正属主后降权)——否则容器非 root 写不进去,会在启动阶段就 `EACCES` 退出。

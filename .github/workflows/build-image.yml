@@ -159,12 +159,10 @@ jobs:
           set -eux
           IMG="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
           echo "IMG=${IMG}" >> "$GITHUB_ENV"
-          mkdir -p /tmp/zc-data /tmp/zc-ws
-          docker run -d --name zcode-smoke \
-            -p 3030:3030 \
-            -v /tmp/zc-data:/data \
-            -v /tmp/zc-ws:/workspace \
-            "${IMG}"
+          # 用匿名卷而不是宿主机 bind mount:Docker 会把镜像里 /data /workspace 的属主
+          # (1000:1000)复制给卷,非 root 容器可直接写。bind mount 到新建的 root 目录
+          # 需要先 chown,已在 README 里给出三种修法。
+          docker run -d --name zcode-smoke -p 3030:3030 "${IMG}"
 
       - name: 等待健康
         if: steps.cfg.outputs.smoke == 'true'

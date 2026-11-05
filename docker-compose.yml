@@ -34,6 +34,12 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,.local}
+    # 权限:我们默认不指定 user,容器以镜像内的非 root(1000:1000)启动。
+    # 若 bind mount 到宿主机上新建的空目录(属主 root),会 EACCES —— 三选一:
+    #   1) 命名卷(无此问题):把下面 zcode-data 那行换成 - zcode-data:/data
+    #   2) sudo chown -R 1000:1000 <WORKSPACE_DIR> 以及你的数据目录
+    #   3) 取消注释下面这行,入口脚本会以 root 修正属主后自动降权到 1000 运行
+    # user: "0:0"
     volumes:
       # 凭据 / 会话库 / 插件缓存 / 日志：必须持久化，否则重建容器要重新登录
       - zcode-data:/data
