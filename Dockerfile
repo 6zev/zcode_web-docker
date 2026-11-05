@@ -109,7 +109,8 @@ RUN set -eux; \
     mkdir -p /opt/zcode-agent; \
     cp -a "/app/packages/desktop/bundled-agents/${AGENT_KEY}/glm/." /opt/zcode-agent/; \
     test -f /opt/zcode-agent/zcode.cjs; \
-    echo "[zcode-web] build artifacts ok (agent=${AGENT_KEY})"
+    echo "[zcode-web] build artifacts ok (agent=${AGENT_KEY})"; \
+    id node >/dev/null && echo "[zcode-web] node 用户: $(id -u node):$(id -g node)"
 
 # ============================================================================
 # Stage 2 · runtime —— 只留运行期需要的产物与依赖，非 root 运行
@@ -147,7 +148,10 @@ RUN set -eux; \
       procps tini util-linux; \
     rm -rf /var/lib/apt/lists/*; \
     groupmod -o -g "${APP_GID}" node; \
-    usermod -o -u "${APP_UID}" -g "${APP_GID}" -d /root/zcode/data -s /bin/bash -m node
+    # 只改 UID/GID,不动 home 目录 —— usermod -d 会把 /home/node 改名到 /root/... 而失败
+    # (exit 12: cannot rename directory /home/node to /root/zcode/data)。
+    # 非 root 回退(--user 1000:1000)时 HOME 由 --env/-e 指定为 /root,入口脚本负责建目录与改属主。
+    usermod -o -u "${APP_UID}" -g "${APP_GID}" -s /bin/bash node
 
 WORKDIR /root/zcode/workspace
 
@@ -171,7 +175,7 @@ COPY --from=builder /app/apps/zcode-cli/package.json /app/apps/zcode-cli/package
 #   /root/zcode/workspace 默认工作目录(ZCode 在这里读写你的代码)
 # 想换位置:覆盖 ZCODE_DATA_DIR 与 ZCODE_WORKSPACE 两个环境变量即可。
 RUN set -eux; \
-    mkdir -p /root/zcode/data /root/zcode/workspace /app/agent; \
+    mkdir -p /root /root/zcode/data /root/zcode/workspace /app/agent; \
     chown -R "$(id -u):$(id -g)" /app /root; \
     chmod +x /app/agent/zcode.cjs; \
     if find /app/node_modules -name 'pty.node' -print -quit | grep -q .; then \
