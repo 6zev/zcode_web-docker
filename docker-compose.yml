@@ -56,7 +56,10 @@ services:
   #   - 默认账号 zcode / 口令 zcode,上线前必须用 GATEWAY_AUTH_PASSWORD 改掉
   # ---------------------------------------------------------------------------
   gateway:
-    image: ${GATEWAY_IMAGE:-nginx:1.27-alpine}
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    image: ${GATEWAY_IMAGE:-zcode-gateway:latest}
     container_name: zcode-gateway
     restart: unless-stopped
     depends_on:
@@ -78,7 +81,8 @@ services:
       - ./gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
+      # 未认证返回 401 也算"网关活着"(说明 nginx 在监听、认证在工作)
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:80/); [ \"$$code\" = \"200\" ] || [ \"$$code\" = \"401\" ]"]
       interval: 30s
       timeout: 5s
       start_period: 10s

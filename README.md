@@ -33,7 +33,8 @@ docker run -d --name zcode-web -p 127.0.0.1:3030:3030 \
 |---|---|
 | [Dockerfile](Dockerfile) | 两阶段:`builder`(克隆官方仓库 + 构建 server/web/agent)→ `runtime`(非 root、tini、HEALTHCHECK) |
 | [docker-compose.yml](docker-compose.yml) | 一条命令起服务:gateway(对外入口)+ zcode-web(内部) |
-| [gateway/nginx.conf](gateway/nginx.conf) | **默认网关**:nginx 配置(Basic Auth + 反代 + WebSocket + 限速) |
+| [gateway/nginx.conf.template](gateway/nginx.conf.template) | **默认网关**配置模板:Basic Auth + 反代 + WebSocket + 限速 |
+| [gateway/Dockerfile](gateway/Dockerfile) | 网关镜像:nginx:1.27-alpine + openssl(约 25MB) |
 | [gateway/Caddyfile](gateway/Caddyfile) | 备用网关:同功能的 Caddy 实现(自动 HTTPS,`--profile caddy`) |
 | [docker-entrypoint.sh](docker-entrypoint.sh) | 准备数据目录、首次铺默认设置、打印启动诊断 |
 | [zcode-preflight.sh](zcode-preflight.sh) | 镜像自检:产物 / 权限 / 网络 / 健康 |
@@ -78,7 +79,7 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 
 | 方案 | 怎么做 | 开销 |
 |---|---|---|
-| **A · nginx(默认)** | `docker compose up -d` | 镜像 ~20MB,内存约 5–10MB |
+| **A · nginx(默认)** | `docker compose up -d`(会在本地构建网关镜像) | 镜像 ~25MB,内存约 5–10MB |
 | **B · Caddy(功能多)** | `docker compose --profile caddy up -d`(另有自动 HTTPS、访问日志面板) | 镜像 ~24MB,内存约 20–40MB |
 | **C · 零额外容器** | 不用代理:给 zcode-web 打开 `ports`,并设 `ZCODE_SERVER_AUTH_TOKEN=<随机串>`;首次访问 `http://host:3030/?token=<随机串>` 换 Cookie 即可(`/api` 与 `/ws` 都受保护) | 0 额外内存,但没有 TLS 终止、没有统一限速 |
 

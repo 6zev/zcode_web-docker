@@ -98,7 +98,7 @@ jobs:
             -e ZCODE_UPSTREAM=zcode-web:3030 -e ZCODE_AUTH_PASSWORD=smoke \
             -v "$PWD/gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro" \
             -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
-            nginx:1.27-alpine sh -c 'sh /docker-entrypoint.d/10-zcode-auth.sh'
+            "$(docker build -q ./gateway)" sh -c 'sh /docker-entrypoint.d/10-zcode-auth.sh'
 
       - name: 校验网关入口脚本(nginx + caddy)
         run: |
@@ -227,7 +227,7 @@ jobs:
             -e ZCODE_RATE=50r/s -e ZCODE_BURST=200 \
             -v "$PWD/gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro" \
             -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
-            nginx:1.27-alpine
+            "$(docker build -q ./gateway)"
           for i in $(seq 1 30); do
             code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18080/ || true)"
             [ "${code}" = "401" ] && break
