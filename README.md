@@ -9,12 +9,12 @@
 docker pull ghcr.io/6zev/zcode_web_docker:latest
 
 docker run -d --name zcode-web -p 3030:3030 \
-  -v zcode-data:/data \
-  -v /你的/代码目录:/workspace \
+  -v zcode-data:/root/zcode/data \
+  -v /你的/代码目录:/root/zcode/workspace \
   ghcr.io/6zev/zcode_web_docker:latest
 ```
 
-打开 `http://<服务器IP>:3030/` → 完成 Z.ai OAuth 登录 → 开始用。凭据落在 `/data` 卷,重建容器不掉登录。
+打开 `http://<服务器IP>:3030/` → 完成 Z.ai OAuth 登录 → 开始用。凭据落在 `/root/zcode/data` 卷,重建容器不掉登录。
 
 > 完整文档见 [DETAILED-README.md](DETAILED-README.md):构建细节、环境变量、验证方法、常见问题。
 
@@ -49,5 +49,5 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 
 - 容器需能访问 `zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`(登录与推理);不通时给容器配 `HTTPS_PROXY`。
 - 只用 Docker 跑镜像:**不需要**本地 Node/pnpm。要自己构建镜像:构建机需能出网,首次构建约 10–25 分钟。
-- 卷 `/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/workspace` 是 ZCode 的默认工作目录。
-- 镜像默认以 **root** 运行,入口脚本会自动把 `/data` 与 `/workspace` 的属主修正为当前 UID,所以 bind mount 到新建的空目录也不会 `EACCES`。想跑非 root:`--user 1000:1000` + `sudo chown -R 1000:1000 <挂载目录>`。
+- 卷 `/root/zcode/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/root/zcode/workspace` 是 ZCode 的默认工作目录。
+- 镜像默认以 **root** 运行,入口脚本会自动把 `/root/zcode/data` 与 `/root/zcode/workspace` 的属主修正为当前 UID,所以 bind mount 到新建的空目录也不会 `EACCES`。想跑非 root:`--user 1000:1000` + `sudo chown -R 1000:1000 <挂载目录>`。

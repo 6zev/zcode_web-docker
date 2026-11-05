@@ -17,7 +17,7 @@ docker compose up -d --build  # 首次:拉官方仓库 + 装依赖 + 构建(约 
 ```
 
 打开 `http://<服务器IP>:3030/` → 点登录 → 在浏览器里完成 Z.ai OAuth
-(容器需要能访问 `zcode.z.ai`)。凭据落在 `/data` 卷,`docker compose up -d --force-recreate`
+(容器需要能访问 `zcode.z.ai`)。凭据落在 `/root/zcode/data` 卷,`docker compose up -d --force-recreate`
 不会掉登录。
 
 不用 compose:
@@ -25,8 +25,8 @@ docker compose up -d --build  # 首次:拉官方仓库 + 装依赖 + 构建(约 
 ```bash
 docker build -t zcode-web:3.17.2 .
 docker run -d --name zcode-web -p 3030:3030 \
-  -v zcode-data:/data \
-  -v /你的/代码目录:/workspace \
+  -v zcode-data:/root/zcode/data \
+  -v /你的/代码目录:/root/zcode/workspace \
   zcode-web:3.17.2
 ```
 
@@ -35,7 +35,7 @@ docker run -d --name zcode-web -p 3030:3030 \
 | 文件 | 作用 |
 |---|---|
 | [Dockerfile](Dockerfile) | 两阶段:`builder`(克隆 + 构建)→ `runtime`(仅运行、非 root、含 HEALTHCHECK) |
-| [docker-compose.yml](docker-compose.yml) | 一条命令起服务,端口映射,`/data` + `/workspace` 卷 |
+| [docker-compose.yml](docker-compose.yml) | 一条命令起服务,端口映射,`/root/zcode/data` + `/root/zcode/workspace` 卷 |
 | [docker-entrypoint.sh](docker-entrypoint.sh) | 准备数据目录、首次铺默认设置、打印启动诊断 |
 | [zcode-preflight.sh](zcode-preflight.sh) | 镜像自检(产物/权限/网络/健康),进容器执行 |
 | [.env.example](.env.example) | 构建/运行变量 |
@@ -73,22 +73,22 @@ pnpm --filter @zcode/web build                 # → packages/web/dist/
 | `PORT` | `3030` | HTTP 与 WS 同端口。注意:非法/0 会回落到 3030,不能随机端口 |
 | `ZCODE_SERVER_HOST` | `0.0.0.0` | 绑定地址;置空时 hono 把 `undefined` 传给 `listen`,实际也是全部网卡 |
 | `ZCODE_WEB_STATIC_ROOT` | `/app/packages/web/dist` | UI 静态根,必须含 `index.html`,且只能挂在 `/`(无 basePath) |
-| `HOME` | `/data` | **决定** settings、session DB(`~/.zcode/cli/db`)、插件缓存 |
-| `ZCODE_DATA_BASE_DIR` | `/data` | **决定** `{base}/.zcode/v2`(凭据、tasks-index、provider 配置) |
-| `ZCODE_STORAGE_DIR` | `/data/.zcode` | 与默认值等价(exec/clipboard/SEA 用),保留无害 |
-| `ZCODE_SERVER_WORKSPACE` | `/workspace` | 默认工作区(未设则取 `process.cwd()`) |
+| `HOME` | `/root` | **决定** settings、session DB(`~/.zcode/cli/db`)、插件缓存 |
+| `ZCODE_DATA_BASE_DIR` | `/root/zcode/data` | **决定** `{base}/.zcode/v2`(凭据、tasks-index、provider 配置) |
+| `ZCODE_STORAGE_DIR` | `/root/zcode/data/.zcode` | 与默认值等价(exec/clipboard/SEA 用),保留无害 |
+| `ZCODE_SERVER_WORKSPACE` | `/root/zcode/workspace` | 默认工作区(未设则取 `process.cwd()`) |
 | `ZCODE_AGENT_SERVER_COMMAND` | `/app/agent/zcode.cjs` | Agent 入口;显式设置优先级最高 |
 | `ZCODE_AGENT_SERVER_ARGS_JSON` | `["app-server","--stdio"]` | 必须是 JSON 字符串数组 |
 | `ZCODE_SERVER_AUTH_TOKEN` | *(空)* | 设了之后 `/api/*`、`/ws` 要求令牌,首访需 `http://host:3030/?token=<值>` 换 Cookie |
 
 > 只有 `HOME` + `ZCODE_DATA_BASE_DIR` 是**必须**成对设置的:`HOME` 管 settings/会话库,
-> `ZCODE_DATA_BASE_DIR` 管 `v2/`。只设后者会让状态分裂到 `/root/.zcode` 与 `/data` 两处。
+> `ZCODE_DATA_BASE_DIR` 管 `v2/`。只设后者会让状态分裂到 `/root/.zcode` 与 `/root/zcode/data` 两处。
 > 另:`ZCODE_SERVER_TOKEN` 是死变量(只影响 `/api/server-info` 自述),别用它当门禁。
 
-卷:`/data`(必须持久化:登录、会话、插件缓存)、`/workspace`(你的代码)。
+卷:`/root/zcode/data`(必须持久化:登录、会话、插件缓存)、`/root/zcode/workspace`(你的代码)。
 
-> 运行身份:镜像默认 **root**(挂载卷、改属主、临时装包都最省事);入口脚本启动时会把 `/data` 与
-> `/workspace` 的属主修正为当前 UID,所以 bind mount 到宿主机上新建的空目录也能直接跑。
+> 运行身份:镜像默认 **root**(挂载卷、改属主、临时装包都最省事);入口脚本启动时会把 `/root/zcode/data` 与
+> `/root/zcode/workspace` 的属主修正为当前 UID,所以 bind mount 到宿主机上新建的空目录也能直接跑。
 > 想改回非 root:`--user 1000:1000`(compose 里写 `user: "1000:1000"`),并 `sudo chown -R 1000:1000 <挂载目录>`,
 > 或先以 root 起一次让入口脚本把属主改好。
 
@@ -96,12 +96,12 @@ pnpm --filter @zcode/web build                 # → packages/web/dist/
 
 ```bash
 docker compose ps                        # health: healthy
-docker compose logs -f zcode-web         # [zcode-web] workspace=/workspace data=... port=3030 ...
+docker compose logs -f zcode-web         # [zcode-web] workspace=/root/zcode/workspace data=/root/zcode/data/.zcode ...
 docker compose exec zcode-web /usr/local/bin/zcode-preflight.sh
 ```
 
 自检脚本会逐项检查:Node ≥24 与 `node:sqlite`、`entry-http.js`、`web/dist/index.html`、
-Agent 入口与随包 `packages/bundled-skills`/`npm`、`/data` 与 `/workspace` 可写性、
+Agent 入口与随包 `packages/bundled-skills`/`npm`、`/root/zcode/data` 与 `/root/zcode/workspace` 可写性、
 `zcode.z.ai` 连通性、`/api/server-info` 与首页响应。
 
 ## 6. 常见问题
@@ -109,11 +109,11 @@ Agent 入口与随包 `packages/bundled-skills`/`npm`、`/data` 与 `/workspace`
 | 现象 | 原因 / 处理 |
 |---|---|
 | 页面全 404,但端口是通的 | `ZCODE_WEB_STATIC_ROOT` 指向的目录里没有 `index.html`(web 构建失败或被裁剪)。最典型的静默失败 |
-| 容器启动即退出,日志 `[zcode-server:http] startup failed` | 数据根不可写。`sudo chown -R 1000:1000 /宿主机/data 卷` 或 `--build-arg APP_UID=$(id -u) --build-arg APP_GID=$(id -g)` |
+| 容器启动即退出,日志 `[zcode-server:http] startup failed` | 数据根不可写。以 root 运行(镜像默认)会自动修正属主;非 root 时 `sudo chown -R 1000:1000 <宿主机上的数据目录>` |
 | UI 能开,发消息报 `agent server command is not configured` | `/app/agent/zcode.cjs` 缺失(build 阶段 agent bundle 未成功) |
 | 官方插件、`/workflow` 技能缺失 | 只拷了单个 `zcode.cjs`。必须整目录拷 `bundled-agents/linux-x64/glm`(镜像里就是 `/app/agent`) |
 | 登录/对话超时 | 容器出网不通:`zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`;在 `.env` 里配 `HTTPS_PROXY` |
-| 以非 root 跑时 `EACCES: permission denied, mkdir '/data/.zcode'` | 镜像默认是 **root** 运行(见下);若你显式改成 `--user 1000:1000`,挂载目录需要 `sudo chown -R 1000:1000 <目录>`,或先以 root 起一次让入口脚本修正属主,或改用命名卷 `-v zcode-data:/data` |
+| 以非 root 跑时 `EACCES: permission denied, mkdir '/root/zcode/data/.zcode'` | 镜像默认是 **root** 运行;若你显式改成 `--user 1000:1000`,挂载目录需要 `sudo chown -R 1000:1000 <目录>`,或先以 root 起一次让入口脚本修正属主,或改用命名卷 `-v zcode-data:/root/zcode/data` |
 | Agent 写不了 workspace(`EACCES`) | bind mount 属主不匹配,`sudo chown -R 1000:1000 <WORKSPACE_DIR>`,或 `--user root` 让入口脚本自愈 |
 | 设了 `ZCODE_SERVER_AUTH_TOKEN` 后 UI 连不上 ws | 首访必须带 `?token=` 换 Cookie;或直接不设令牌(默认) |
 | 终端(terminal)不可用 | `node-pty` 无官方 linux 预编译,构建期靠 g++ 现场编译;失败只影响终端,不阻断启动 |

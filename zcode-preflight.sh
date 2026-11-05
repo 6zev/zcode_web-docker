@@ -40,7 +40,7 @@ else
 fi
 
 section "数据目录"
-for d in "${HOME:-/data}" "${ZCODE_DATA_BASE_DIR:-/data}" "${ZCODE_STORAGE_DIR:-/data/.zcode}" "/workspace"; do
+for d in "${HOME:-/root}" "${ZCODE_DATA_BASE_DIR:-/root/zcode/data}" "${ZCODE_STORAGE_DIR:-/root/zcode/data/.zcode}" "${ZCODE_WORKSPACE:-/root/zcode/workspace}"; do
   if [ -d "${d}" ]; then
     if [ -w "${d}" ]; then ok "可写 ${d}"; else bad "不可写 ${d}(启动会 exitCode 1 或 agent 无法落库)"; fi
   else

@@ -23,9 +23,9 @@ services:
       PORT: "3030"
       HOST: "0.0.0.0"
       ZCODE_SERVER_HOST: "0.0.0.0"
-      ZCODE_DATA_BASE_DIR: /data
-      ZCODE_STORAGE_DIR: /data/.zcode
-      ZCODE_WORKSPACE: /workspace
+      ZCODE_DATA_BASE_DIR: /root/zcode/data
+      ZCODE_STORAGE_DIR: /root/zcode/data/.zcode
+      ZCODE_WORKSPACE: /root/zcode/workspace
       ZCODE_WEB_STATIC_ROOT: /app/packages/web/dist
       TZ: ${TZ:-Asia/Saigon}
       # 可选访问令牌（见 .env.example）
@@ -34,15 +34,15 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,.local}
-    # 运行身份:root(镜像默认)。入口脚本会把 /data 与 /workspace 的属主统一修正为当前 UID,
+    # 运行身份:root(镜像默认)。入口脚本会把 /root/zcode 下的数据与工作区属主修正为当前 UID,
     # 所以 bind mount 到宿主机上新建的空目录也不会 EACCES。
     # 想改回非 root:注释掉下面这行,并 sudo chown -R 1000:1000 <挂载目录>,再用 user: "1000:1000"
     user: "0:0"
     volumes:
       # 凭据 / 会话库 / 插件缓存 / 日志：必须持久化，否则重建容器要重新登录
-      - zcode-data:/data
+      - zcode-data:/root/zcode/data
       # 默认工作目录：ZCode 在这里读写你的代码
-      - ${WORKSPACE_DIR:-./workspace}:/workspace
+      - ${WORKSPACE_DIR:-./workspace}:/root/zcode/workspace
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s

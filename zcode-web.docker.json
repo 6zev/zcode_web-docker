@@ -10,10 +10,13 @@
     "repo": "https://github.com/zai-org/ZCode.git",
     "ref": "main",
     "builtinProviderEnvironment": "production",
-    "ports": { "http": 3030, "ws": "same-port (/ws)" },
+    "ports": {
+      "http": 3030,
+      "ws": "same-port (/ws)"
+    },
     "volumes": {
-      "/data": "HOME：setting.json / credentials.json / tasks-index.sqlite / cli session DB / 插件 cache",
-      "/workspace": "默认工作目录（ZCODE_SERVER_WORKSPACE）"
+      "/root/zcode/data": "HOME 下的数据目录:setting.json / credentials.json / tasks-index.sqlite / cli session DB / 插件 cache / 日志",
+      "/root/zcode/workspace": "默认工作目录(ZCODE_WORKSPACE / ZCODE_SERVER_WORKSPACE)"
     }
   },
   "buildSteps": [
@@ -44,10 +47,10 @@
     "PORT": "3030",
     "ZCODE_SERVER_HOST": "0.0.0.0",
     "ZCODE_WEB_STATIC_ROOT": "/app/packages/web/dist",
-    "HOME": "/data",
-    "ZCODE_DATA_BASE_DIR": "/data",
-    "ZCODE_STORAGE_DIR": "/data/.zcode",
-    "ZCODE_SERVER_WORKSPACE": "/workspace",
+    "HOME": "/root",
+    "ZCODE_DATA_BASE_DIR": "/root/zcode/data",
+    "ZCODE_STORAGE_DIR": "/root/zcode/data/.zcode",
+    "ZCODE_SERVER_WORKSPACE": "/root/zcode/workspace",
     "ZCODE_AGENT_SERVER_COMMAND": "/app/agent/zcode.cjs",
     "ZCODE_AGENT_SERVER_ARGS_JSON": "[\"app-server\",\"--stdio\"]",
     "ZCODE_SERVER_AUTH_TOKEN": "(可选：设了则 /api/* 与 /ws 需 ?token= 换 Cookie)"

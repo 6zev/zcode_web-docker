@@ -2,9 +2,9 @@
 # ZCode Web 容器入口:准备持久化目录、铺默认配置、权限自愈,然后交给 CMD 启动服务。
 set -euo pipefail
 
-DATA_DIR="${ZCODE_DATA_BASE_DIR:-/data}"
+DATA_DIR="${ZCODE_DATA_BASE_DIR:-${ZCODE_DATA_DIR:-/root/zcode/data}}"
 ZCODE_DIR="${DATA_DIR}/.zcode"
-WORKSPACE_DIR="${ZCODE_WORKSPACE:-/workspace}"
+WORKSPACE_DIR="${ZCODE_WORKSPACE:-/root/zcode/workspace}"
 FIX_OWNERSHIP="${ZCODE_FIX_OWNERSHIP:-1}"
 TARGET_UID="${ZCODE_APP_UID:-1000}"
 TARGET_GID="${ZCODE_APP_GID:-1000}"
@@ -12,8 +12,8 @@ TARGET_GID="${ZCODE_APP_GID:-1000}"
 log() { printf '[zcode-web] %s\n' "$*"; }
 die() { printf '[zcode-web] 错误: %s\n' "$*" >&2; exit 1; }
 
-export HOME="${HOME:-/data}"
-export ZCODE_DATA_BASE_DIR="${ZCODE_DATA_BASE_DIR:-/data}"
+export HOME="${HOME:-/root}"
+export ZCODE_DATA_BASE_DIR="${DATA_DIR}"
 export ZCODE_STORAGE_DIR="${ZCODE_STORAGE_DIR:-${ZCODE_DATA_BASE_DIR}/.zcode}"
 
 running_as_root() { [ "$(id -u)" = "0" ]; }
@@ -53,7 +53,7 @@ if [ ! -w "${ZCODE_DIR}" ]; then
   log "        修复方式三选一:"
   log "          1) 以 root 启动让入口脚本自愈:docker run --user 0:0 ...(compose 去掉 user: 即可)"
   log "          2) sudo chown -R $(id -u):$(id -g) <宿主机上的数据目录>"
-  log "          3) 改用命名卷: -v zcode-data:/data(Docker 会把镜像内 /data 的属主复制给卷)"
+  log "          3) 改用命名卷: -v zcode-data:/root/zcode/data(Docker 会把镜像内该目录的属主复制给卷)"
   die "数据目录不可写,启动会失败(entry-http 在建服务前就要写 ${ZCODE_DIR}/v2)"
 fi
 
