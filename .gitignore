@@ -1,0 +1,8 @@
+# 本地/临时文件,不进仓库
+.env
+.env.local
+.cache/
+workspace/
+screenshots/*.tmp
+*.log
+node_modules/

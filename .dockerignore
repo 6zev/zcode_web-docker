@@ -1,0 +1,19 @@
+# 构建上下文里只留源码；真正的依赖在构建阶段安装
+.git
+.gitignore
+.dsh-meow
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+**/.cache
+**/coverage
+*.log
+.env
+.env.local
+.env.*.local
+VERIFY-NOTES.md
+Dockerfile*
+docker-compose.yml
+.dockerignore
+README.md

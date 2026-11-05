@@ -1,0 +1,204 @@
+name: build-image
+
+# 构建 zcode-web 镜像并推送到 GHCR：
+#   ghcr.io/<owner>/zcode_web_docker:latest          （默认分支）
+#   ghcr.io/<owner>/zcode_web_docker:sha-<短SHA>     （每次构建）
+#   ghcr.io/<owner>/zcode_web_docker:3.17.2          （上游版本号）
+#
+# 触发：推 main / PR（只构建不推送）/ 每周定时重建 / 手动（可多平台）
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "screenshots/**"
+      - "VERIFY-NOTES.md"
+  pull_request:
+    branches: [main]
+  schedule:
+    # 每周一 03:17 UTC（北京时间 11:17）重建一次，跟上上游 ZCode 的更新
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 是否推送镜像到 GHCR
+        type: boolean
+        default: true
+      platforms:
+        description: 目标平台（多平台要跑 QEMU，会慢很多）
+        type: choice
+        options:
+          - linux/amd64
+          - linux/amd64,linux/arm64
+        default: linux/amd64
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: zcode_web_docker
+  # 可在仓库 Settings → Variables 里覆盖，不用改工作流
+  NODE_BASE_IMAGE: ${{ vars.NODE_BASE_IMAGE || 'node:24.14.0-bookworm' }}
+  PNPM_VERSION: ${{ vars.PNPM_VERSION || '10.33.2' }}
+
+jobs:
+  # 快速门禁：Dockerfile 与脚本的静态检查，几秒出结果
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: hadolint（Dockerfile）
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+          ignore: DL3008,DL3059,DL3025,DL4006
+
+      - name: shell 语法 + compose / manifest 校验
+        run: |
+          set -eux
+          bash -n docker-entrypoint.sh
+          bash -n zcode-preflight.sh
+          python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('compose yaml ok')"
+          python3 -c "import json; json.load(open('zcode-web.docker.json')); print('manifest json ok')"
+          grep -q 'FROM node:' Dockerfile
+          mkdir -p workspace
+
+  # 真构建：单平台时顺便 load 到本地跑冒烟测试；push 事件推送到 GHCR
+  build:
+    needs: lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算构建参数
+        id: cfg
+        run: |
+          set -eux
+          PLATFORMS="${{ github.event.inputs.platforms || 'linux/amd64' }}"
+          PUSH="false"
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            PUSH="true"
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.push_image }}" = "true" ]; then
+            PUSH="true"
+          fi
+          SMOKE="false"
+          if [ "${PUSH}" = "false" ] && [ "${PLATFORMS}" = "linux/amd64" ]; then
+            SMOKE="true"
+          fi
+          {
+            echo "platforms=${PLATFORMS}"
+            echo "push=${PUSH}"
+            echo "smoke=${SMOKE}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: QEMU（跨平台构建用）
+        if: contains(steps.cfg.outputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: 登录 GHCR
+        if: steps.cfg.outputs.push == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成标签
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=3.17.2
+          labels: |
+            org.opencontainers.image.title=ZCode Web (official zai-org/ZCode)
+            org.opencontainers.image.description=Single-image ZCode Web: @zcode/server HTTP/WS + zcode.cjs app-server over stdio
+            org.opencontainers.image.source=https://github.com/zai-org/ZCode
+
+      - name: 构建（并推送）
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ steps.cfg.outputs.platforms }}
+          push: ${{ steps.cfg.outputs.push == 'true' }}
+          load: ${{ steps.cfg.outputs.smoke == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            NODE_BASE_IMAGE=${{ env.NODE_BASE_IMAGE }}
+            PNPM_VERSION=${{ env.PNPM_VERSION }}
+            APP_UID=1000
+            APP_GID=1000
+          cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
+          cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
+          provenance: false
+
+      # ---- 冒烟测试：真把镜像跑起来，探活 + 容器内自检 ----
+      - name: 启动容器
+        if: steps.cfg.outputs.smoke == 'true'
+        run: |
+          set -eux
+          IMG="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
+          echo "IMG=${IMG}" >> "$GITHUB_ENV"
+          mkdir -p /tmp/zc-data /tmp/zc-ws
+          docker run -d --name zcode-smoke \
+            -p 3030:3030 \
+            -v /tmp/zc-data:/data \
+            -v /tmp/zc-ws:/workspace \
+            "${IMG}"
+
+      - name: 等待健康
+        if: steps.cfg.outputs.smoke == 'true'
+        run: |
+          set -eux
+          code=""
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:3030/api/server-info || true)"
+            echo "attempt ${i}: ${code}"
+            [ "${code}" = "200" ] && break
+            sleep 5
+          done
+          [ "${code}" = "200" ]
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3030/)" = "200" ]
+
+      - name: 容器内自检脚本
+        if: steps.cfg.outputs.smoke == 'true'
+        run: docker exec zcode-smoke /usr/local/bin/zcode-preflight.sh
+
+      - name: 失败时导出日志
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker logs zcode-smoke 2>&1 | tail -200 || true
+
+      - name: 构建摘要
+        if: always()
+        run: |
+          {
+            echo "### zcode-web 镜像构建"
+            echo ""
+            echo "- 平台: \`${{ steps.cfg.outputs.platforms }}\`"
+            echo "- 推送: \`${{ steps.cfg.outputs.push }}\`"
+            echo "- 冒烟测试: \`${{ steps.cfg.outputs.smoke }}\`"
+            echo "- Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

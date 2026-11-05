@@ -1,0 +1,71 @@
+{
+  "version": "3.17.2",
+  "schema": "https://github.com/zai-org/ZCode",
+  "description": "ZCode Web 单镜像构建清单：版本、构建步骤、产物、运行期环境变量（Dockerfile 与 README 的依据）",
+  "image": {
+    "name": "zcode-web",
+    "tag": "3.17.2",
+    "base": "node:24.14.0-bookworm",
+    "pnpm": "10.33.2",
+    "repo": "https://github.com/zai-org/ZCode.git",
+    "ref": "main",
+    "builtinProviderEnvironment": "production",
+    "ports": { "http": 3030, "ws": "same-port (/ws)" },
+    "volumes": {
+      "/data": "HOME：setting.json / credentials.json / tasks-index.sqlite / cli session DB / 插件 cache",
+      "/workspace": "默认工作目录（ZCODE_SERVER_WORKSPACE）"
+    }
+  },
+  "buildSteps": [
+    "corepack prepare pnpm@10.33.2",
+    "git clone --depth 1 ZCODE_REPO",
+    "pnpm install                                    # 根 workspace（prepare 钩子需 HUSKY=0）",
+    "pnpm --dir apps/zcode-cli install               # 子 workspace 独立 lockfile",
+    "node packages/desktop/scripts/prepare-agent-node-bundle.mjs",
+    "pnpm --filter @zcode/server build",
+    "pnpm --filter @zcode/web build",
+    "按 uname -m 选择 bundled-agents/linux-{x64,arm64}/glm → /opt/zcode-agent"
+  ],
+  "buildEnv": {
+    "CI": "1",
+    "HUSKY": "0",
+    "ZCODE_ENV": "production",
+    "PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN": "false",
+    "NODE_OPTIONS": "--max-old-space-size=8192",
+    "network": "安装依赖 + 下载内置 npm 12.2.0 tarball（registry.npmjs.org）需要出网"
+  },
+  "artifacts": {
+    "server": "packages/server/dist/entry-http.js",
+    "web": "packages/web/dist/（index.html + assets/，只能挂在 /）",
+    "agent": "packages/desktop/bundled-agents/<platform>-<arch>/glm/zcode.cjs",
+    "agentDirContents": "zcode.cjs / .node-bundle-meta.json / packages/{17 个官方插件,bundled-skills} / node-runtime/npm"
+  },
+  "runtimeEnv": {
+    "PORT": "3030",
+    "ZCODE_SERVER_HOST": "0.0.0.0",
+    "ZCODE_WEB_STATIC_ROOT": "/app/packages/web/dist",
+    "HOME": "/data",
+    "ZCODE_DATA_BASE_DIR": "/data",
+    "ZCODE_STORAGE_DIR": "/data/.zcode",
+    "ZCODE_SERVER_WORKSPACE": "/workspace",
+    "ZCODE_AGENT_SERVER_COMMAND": "/app/agent/zcode.cjs",
+    "ZCODE_AGENT_SERVER_ARGS_JSON": "[\"app-server\",\"--stdio\"]",
+    "ZCODE_SERVER_AUTH_TOKEN": "(可选：设了则 /api/* 与 /ws 需 ?token= 换 Cookie)"
+  },
+  "invariants": [
+    "HOME 与 ZCODE_DATA_BASE_DIR 必须成对设置，否则 setting/会话库与 task index/凭据分叉",
+    "ZCODE_STORAGE_DIR 不决定 session DB，与默认值等价（可留）",
+    "ZCODE_SERVER_TOKEN 是死变量，不能当门禁",
+    "agent 必须整目录就位：插件与 bundled-skills 按 dirname(zcode.cjs) 就近解析",
+    "前端静态根缺 index.html 时端口正常但全 404（最典型的静默失败）",
+    "Node >= 24（node:sqlite）；builder 与 runtime 需同架构同 glibc",
+    "entry-http.js 外置 hono/ws/ssh2/node-pty/undici/axios/form-data 等，运行时必须带 node_modules"
+  ],
+  "verified": {
+    "nativeBuild": "根 install 2m05s / server+web build 45s / agent bundle 6m39s 全部成功",
+    "runtime": "服务端 200 + 静态资源 200 + WS 握手成功 + headless Chrome 渲染出登录页（0 console error）",
+    "agent": "zcode.cjs plugins list 列出 16 个官方插件并从随包资源 seed；app-server --stdio 起停正常",
+    "preflight": "对真实实例运行 zcode-preflight.sh：20 项通过 / 0 失败",
+    "notVerified": "docker build 本身、容器内非 root 与 HEALTHCHECK（本沙箱无 docker）"
+  }
+}

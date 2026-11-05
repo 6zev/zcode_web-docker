@@ -1,0 +1,47 @@
+name: zcode-web
+
+services:
+  zcode-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_BASE_IMAGE: ${NODE_BASE_IMAGE:-node:24.14.0-bookworm}
+        PNPM_VERSION: ${PNPM_VERSION:-10.33.2}
+        ZCODE_REPO: ${ZCODE_REPO:-https://github.com/zai-org/ZCode.git}
+        ZCODE_REF: ${ZCODE_REF:-main}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    image: ${IMAGE_NAME:-zcode-web}:${IMAGE_TAG:-3.17.2}
+    container_name: zcode-web
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${BIND_HOST:-0.0.0.0}:${BIND_PORT:-3030}:3030"
+    environment:
+      PORT: "3030"
+      HOST: "0.0.0.0"
+      ZCODE_SERVER_HOST: "0.0.0.0"
+      ZCODE_DATA_BASE_DIR: /data
+      ZCODE_STORAGE_DIR: /data/.zcode
+      ZCODE_WORKSPACE: /workspace
+      ZCODE_WEB_STATIC_ROOT: /app/packages/web/dist
+      TZ: ${TZ:-Asia/Saigon}
+      # 可选访问令牌（见 .env.example）
+      ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:-}
+      # 可选代理
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,.local}
+    volumes:
+      # 凭据 / 会话库 / 插件缓存 / 日志：必须持久化，否则重建容器要重新登录
+      - zcode-data:/data
+      # 默认工作目录：ZCode 在这里读写你的代码
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+
+volumes:
+  zcode-data:
