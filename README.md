@@ -27,7 +27,7 @@ docker compose up -d --build
 | 文件 | 作用 |
 |---|---|
 | [Dockerfile](Dockerfile) | 两阶段:`builder`(克隆官方仓库 + 构建 server/web/agent)→ `runtime`(非 root、tini、HEALTHCHECK) |
-| [docker-compose.yml](docker-compose.yml) | 一条命令起服务:gateway(对外入口)+ zcode-web(内部) |
+| [docker-compose.yml](docker-compose.yml) | 一条命令起服务:默认直接发布 zcode-web(自带令牌保护);网关走可选 profile |
 | [gateway/nginx.conf.template](gateway/nginx.conf.template) | **默认网关**配置模板:Basic Auth + 反代 + WebSocket + 限速 |
 | [gateway/Dockerfile](gateway/Dockerfile) | 网关镜像:nginx:1.27-alpine + openssl(约 25MB) |
 | [gateway/Caddyfile](gateway/Caddyfile) | 备用网关:同功能的 Caddy 实现(自动 HTTPS,`--profile caddy`) |
@@ -40,22 +40,45 @@ docker compose up -d --build
 
 ## CI 工作流
 
-- **触发**:推 `main` / PR(只构建不推送)/ 每周一 03:17 UTC 定时重建 / 手动触发(可选多平台)。
+- **触发**:推 `main` / PR(只构建不推送)/ **每天 03:17 UTC 自动检查上游版本** / 手动触发(可选多平台、可强制重建)。
 - **lint job**:hadolint(只卡 error)+ shell 语法 + compose/manifest 校验。
-- **build job**:Buildx 构建 → 推送 `ghcr.io/6zev/zcode_web_docker`(`latest` / `sha-<短SHA>` / `3.17.2`)
+- **upstream job**:读 `zai-org/ZCode` 的 `package.json` 版本;定时任务先用 `docker manifest inspect` 查 GHCR,
+  已有 `<版本>` tag 就直接跳过,没有才进入构建 —— 这样上游发新版本后会自动构建并推送新镜像。
+- **build job**:Buildx 构建 → 推送 `ghcr.io/6zev/zcode_web_docker`(`latest` / `sha-<短SHA>` / `<上游版本>`,如 `3.17.2`)
   → 单平台且不推送时,额外 `load` 到本地跑**冒烟测试**(起容器 → 探活 `/api/server-info` 与首页 → 容器内自检脚本)。
 - 构建缓存用 `type=gha`,重复构建会快很多。
+- 部署端自动跟进:`docker compose pull && docker compose up -d`(compose 默认用 `latest`);
+  想锁定版本就把 `IMAGE_TAG` 设成具体的上游版本号。
 
-手动触发多平台构建:
+手动触发(强制重建)多平台:
 
 ```bash
-gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=true
+gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=true -f force=true
 ```
+
+## Python / 浏览器工具链
+
+镜像内已装好(版本可用 build args 覆盖):
+
+| 组件 | 版本 / 位置 | 说明 |
+|---|---|---|
+| Python 3 | Debian bookworm 自带(3.11),`python` / `python3` | `pip` 可直接装包(`PIP_BREAK_SYSTEM_PACKAGES=1`) |
+| uv | `0.13.7`,`/usr/local/bin/uv`、`uvx` | 固定版本,可 `uv venv` / `uv pip install` / `uvx` |
+| Playwright CLI | `1.59.1`(与上游 agent 的 playwright-core 对齐) | `playwright --version` |
+| Playwright Chromium | `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright` | 含 `playwright install --with-deps chromium` 的完整系统依赖 |
+| Chrome / Chromium | amd64 = Google Chrome stable;arm64 = Debian Chromium | `CHROME_BIN=/usr/local/bin/chrome` |
+
+- ZCode 的 browser-use 会按 `executablePath → playwright → /usr/bin/google-chrome-stable → …` 自动找浏览器。
+- 容器默认 root,Chrome 与 Playwright Chromium 以 root 启动必须 `--no-sandbox`;镜像用 wrapper 自动补上(**默认开启**),
+  设 `ZCODE_CHROME_NO_SANDBOX=0` 可关闭(仅建议非 root + 启用 sandbox 时)。
+- compose 已加 `shm_size: 1gb`,避免多标签页时 `/dev/shm` 不足崩溃。
+- 例:`uvx --from playwright playwright --version`;Playwright 用系统 Chrome 时传 `channel="chrome"`。
 
 ## 环境要求
 
 - 容器需能访问 `zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`(登录与推理);不通时给容器配 `HTTPS_PROXY`。
-- 只用 Docker 跑镜像:**不需要**本地 Node/pnpm。要自己构建镜像:构建机需能出网,首次构建约 10–25 分钟。
+- 只用 Docker 跑镜像:**不需要**本地 Node/pnpm。要自己构建镜像:构建机需能出网,首次构建约 10–25 分钟
+  (含 Python/uv/Chrome/Playwright 后体积与时间会再增加一些)。
 - 卷 `/root/zcode/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/root/zcode/workspace` 是 ZCode 的默认工作目录。
 - 镜像默认以 **root** 运行,入口脚本会自动把 `/root/zcode/data` 与 `/root/zcode/workspace` 的属主修正为当前 UID,所以 bind mount 到新建的空目录也不会 `EACCES`。想跑非 root:`--user 1000:1000` + `sudo chown -R 1000:1000 <挂载目录>`。
 

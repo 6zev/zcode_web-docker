@@ -3,9 +3,10 @@ name: build-image
 # 构建 zcode-web 镜像并推送到 GHCR：
 #   ghcr.io/<owner>/zcode_web_docker:latest          （默认分支）
 #   ghcr.io/<owner>/zcode_web_docker:sha-<短SHA>     （每次构建）
-#   ghcr.io/<owner>/zcode_web_docker:3.17.2          （上游版本号）
+#   ghcr.io/<owner>/zcode_web_docker:<上游版本>      （自动跟随 ZCode 版本）
 #
-# 触发：推 main / PR（只构建不推送）/ 每周定时重建 / 手动（可多平台）
+# 触发：推 main / PR（只构建不推送）/ 每天定时检查上游 ZCode 版本 /
+#       手动（可强制重建、可多平台）。定时任务只在 GHCR 还没有该版本 tag 时构建。
 permissions:
   contents: read
 
@@ -19,14 +20,18 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # 每周一 03:17 UTC（北京时间 11:17）重建一次，跟上上游 ZCode 的更新
-    - cron: "17 3 * * 1"
+    # 每天 03:17 UTC（北京时间 11:17）检查一次上游 ZCode 版本
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       push_image:
         description: 是否推送镜像到 GHCR
         type: boolean
         default: true
+      force:
+        description: 已有同版本镜像时也强制重建
+        type: boolean
+        default: false
       platforms:
         description: 目标平台（多平台要跑 QEMU，会慢很多）
         type: choice
@@ -44,6 +49,8 @@ env:
   # 可在仓库 Settings → Variables 里覆盖，不用改工作流
   NODE_BASE_IMAGE: ${{ vars.NODE_BASE_IMAGE || 'node:24.14.0-bookworm' }}
   PNPM_VERSION: ${{ vars.PNPM_VERSION || '10.33.2' }}
+  UV_VERSION: ${{ vars.UV_VERSION || '0.13.7' }}
+  PLAYWRIGHT_VERSION: ${{ vars.PLAYWRIGHT_VERSION || '1.59.1' }}
 
 jobs:
   # 快速门禁：Dockerfile 与脚本的静态检查，几秒出结果
@@ -134,9 +141,68 @@ jobs:
           sh -n gateway/nginx-entrypoint.sh
           sh -n gateway/docker-entrypoint.sh
 
+  # 解析上游 ZCode 版本，并决定本次是否需要构建。
+  # 定时/手动推送：GHCR 已有 <version> tag 就跳过（force=true 可强制）；push/PR 默认构建。
+  upstream:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - name: 读取上游版本
+        id: version
+        run: |
+          set -eux
+          REF="${{ vars.ZCODE_REF || 'main' }}"
+          VERSION="$(curl -fsSL --retry 3 --max-time 30 \
+            "https://raw.githubusercontent.com/zai-org/ZCode/${REF}/package.json" | jq -r '.version')"
+          echo "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "上游 ZCode: v${VERSION} (ref=${REF})"
+
+      - name: 登录 GHCR（只读，用于查询已有版本 tag）
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 判断是否需要构建
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+          PUSH_INPUT: ${{ github.event.inputs.push_image || 'false' }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eux
+          SHOULD=true
+          CHECK=false
+          if [ "$EVENT" = "schedule" ]; then CHECK=true; fi
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$PUSH_INPUT" = "true" ]; then CHECK=true; fi
+          if [ "$CHECK" = "true" ]; then
+            if [ "$FORCE" = "true" ]; then
+              echo "force=true，强制构建"
+            else
+              IMG="ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${VERSION}"
+              if docker manifest inspect "${IMG}" >/dev/null 2>&1; then
+                echo "已存在 ${IMG}，跳过构建（需要重建请带 force=true）"
+                SHOULD=false
+              else
+                echo "GHCR 还没有 ${IMG}，开始构建"
+              fi
+            fi
+          fi
+          echo "should_build=${SHOULD}" >> "$GITHUB_OUTPUT"
+
   # 真构建：单平台时顺便 load 到本地跑冒烟测试；push 事件推送到 GHCR
   build:
-    needs: lint
+    needs: [lint, upstream]
+    if: needs.upstream.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -188,11 +254,12 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
-            type=raw,value=3.17.2
+            type=raw,value=${{ needs.upstream.outputs.version }}
           labels: |
             org.opencontainers.image.title=ZCode Web (official zai-org/ZCode)
             org.opencontainers.image.description=Single-image ZCode Web: @zcode/server HTTP/WS + zcode.cjs app-server over stdio
             org.opencontainers.image.source=https://github.com/zai-org/ZCode
+            org.opencontainers.image.version=${{ needs.upstream.outputs.version }}
 
       - name: 构建（并推送）
         id: build
@@ -208,6 +275,9 @@ jobs:
           build-args: |
             NODE_BASE_IMAGE=${{ env.NODE_BASE_IMAGE }}
             PNPM_VERSION=${{ env.PNPM_VERSION }}
+            ZCODE_REF=${{ vars.ZCODE_REF || 'main' }}
+            UV_VERSION=${{ env.UV_VERSION }}
+            PLAYWRIGHT_VERSION=${{ env.PLAYWRIGHT_VERSION }}
             APP_UID=1000
             APP_GID=1000
           cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
@@ -224,7 +294,7 @@ jobs:
           # 用匿名卷而不是宿主机 bind mount:Docker 会把镜像里 /root/zcode/* 的属主
           # (1000:1000)复制给卷,非 root 容器可直接写。bind mount 到新建的 root 目录
           # 需要先 chown,已在 README 里给出三种修法。
-          docker run -d --name zcode-smoke -p 3030:3030 "${IMG}"
+          docker run -d --name zcode-smoke --shm-size=1g -p 3030:3030 "${IMG}"
 
       - name: 等待健康
         if: steps.cfg.outputs.smoke == 'true'
@@ -300,6 +370,7 @@ jobs:
           {
             echo "### zcode-web 镜像构建"
             echo ""
+            echo "- 上游 ZCode: \`v${{ needs.upstream.outputs.version }}\`"
             echo "- 平台: \`${{ steps.cfg.outputs.platforms }}\`"
             echo "- 推送: \`${{ steps.cfg.outputs.push }}\`"
             echo "- 冒烟测试: \`${{ steps.cfg.outputs.smoke }}\`"

@@ -39,6 +39,37 @@ else
   bad "ZCODE_AGENT_SERVER_ARGS_JSON 不是合法 JSON 数组"
 fi
 
+section "Python / 浏览器工具链"
+ok_or_bad "python3 ($(python3 --version 2>&1))" "python3 --version"
+if [ -x /usr/local/bin/uv ] || command -v uv >/dev/null 2>&1; then
+  ok "uv ($(uv --version 2>&1))"
+else
+  bad "未找到 uv(uvx / uv pip 不可用)"
+fi
+if command -v playwright >/dev/null 2>&1; then
+  ok "playwright CLI ($(playwright --version 2>&1))"
+else
+  warn "未找到 playwright CLI(Python/Node 仍可自行安装)"
+fi
+CHROME_BIN_RESOLVED="$(command -v "${CHROME_BIN:-chrome}" 2>/dev/null || command -v google-chrome-stable 2>/dev/null || command -v google-chrome 2>/dev/null || command -v chromium 2>/dev/null || true)"
+if [ -n "${CHROME_BIN_RESOLVED}" ]; then
+  CHROME_VER="$("${CHROME_BIN_RESOLVED}" --version 2>/dev/null | head -1)"
+  ok "Chrome/Chromium: ${CHROME_VER:-${CHROME_BIN_RESOLVED}}"
+  if timeout 30 "${CHROME_BIN_RESOLVED}" --headless=new --disable-gpu --dump-dom about:blank >/dev/null 2>&1; then
+    ok "Chrome headless 可启动"
+  else
+    warn "Chrome headless 启动失败(检查 --no-sandbox / 库依赖;browser-use 可能不可用)"
+  fi
+else
+  bad "未找到 Chrome/Chromium(browser-use 不可用)"
+fi
+PW_CHROME="$(find "${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}" -type f -name chrome -perm -u+x 2>/dev/null | head -1)"
+if [ -n "${PW_CHROME}" ]; then
+  ok "Playwright Chromium: ${PW_CHROME}"
+else
+  warn "未找到 Playwright Chromium(可用 playwright install chromium 安装)"
+fi
+
 section "数据目录"
 for d in "${HOME:-/root}" "${ZCODE_DATA_BASE_DIR:-/root/zcode/data}" "${ZCODE_STORAGE_DIR:-/root/zcode/data/.zcode}" "${ZCODE_WORKSPACE:-/root/zcode/workspace}"; do
   if [ -d "${d}" ]; then

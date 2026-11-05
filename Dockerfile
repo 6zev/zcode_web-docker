@@ -17,6 +17,9 @@ ARG NODE_BASE_IMAGE=node:24.14.0-bookworm
 ARG PNPM_VERSION=10.33.2
 ARG APP_UID=1000
 ARG APP_GID=1000
+# Python / browser toolchain pins (overridable at build time)
+ARG UV_VERSION=0.13.7
+ARG PLAYWRIGHT_VERSION=1.59.1
 
 # ============================================================================
 # Stage 1 · builder —— 装依赖 + 构建 web 静态资源、server、agent bundle
@@ -119,6 +122,9 @@ FROM ${NODE_BASE_IMAGE} AS runtime
 
 ARG APP_UID=1000
 ARG APP_GID=1000
+ARG UV_VERSION=0.13.7
+ARG PLAYWRIGHT_VERSION=1.59.1
+ARG CHROME_DEB_URL=https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 
 ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
@@ -138,20 +144,112 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ZCODE_WORKSPACE=/root/zcode/workspace \
     ZCODE_SERVER_WORKSPACE=/root/zcode/workspace \
     ZCODE_FIX_OWNERSHIP=1 \
-    ZCODE_DROP_PRIVILEGES=0
+    ZCODE_DROP_PRIVILEGES=0 \
+    PYTHONUNBUFFERED=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    UV_LINK_MODE=copy \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    CHROME_BIN=/usr/local/bin/chrome \
+    PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chrome \
+    ZCODE_CHROME_NO_SANDBOX=1
 
 # hadolint ignore=DL3008
 RUN set -eux; \
     apt-get update -qq; \
     apt-get install -y --no-install-recommends \
       bash ca-certificates curl git openssh-client \
-      procps tini util-linux; \
+      procps tini util-linux \
+      python3 python3-pip python3-venv python3-dev \
+      fonts-liberation fonts-noto-cjk fonts-noto-color-emoji; \
     rm -rf /var/lib/apt/lists/*; \
     groupmod -o -g "${APP_GID}" node; \
     # 只改 UID/GID,不动 home 目录 —— usermod -d 会把 /home/node 改名到 /root/... 而失败
     # (exit 12: cannot rename directory /home/node to /root/zcode/data)。
     # 非 root 回退(--user 1000:1000)时 HOME 由 --env/-e 指定为 /root,入口脚本负责建目录与改属主。
     usermod -o -u "${APP_UID}" -g "${APP_GID}" -s /bin/bash node
+
+# ---- Python 3 + uv -----------------------------------------------------------
+# Debian bookworm 自带 Python 3.11;pypi 包默认走系统解释器。uv 由官方 GitHub
+# release 安装到 /usr/local/bin(uv + uvx),固定版本保证可复现。
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64) UV_ARCH=x86_64 ;; \
+      aarch64|arm64) UV_ARCH=aarch64 ;; \
+      *) echo "unsupported arch for uv: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 \
+      "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_ARCH}-unknown-linux-gnu.tar.gz" \
+      -o /tmp/uv.tgz; \
+    tar -xzf /tmp/uv.tgz -C /tmp; \
+    install -m 0755 "/tmp/uv-${UV_ARCH}-unknown-linux-gnu/uv" /usr/local/bin/uv; \
+    if [ -x "/tmp/uv-${UV_ARCH}-unknown-linux-gnu/uvx" ]; then \
+      install -m 0755 "/tmp/uv-${UV_ARCH}-unknown-linux-gnu/uvx" /usr/local/bin/uvx; \
+    fi; \
+    rm -rf /tmp/uv.tgz "/tmp/uv-${UV_ARCH}-unknown-linux-gnu"; \
+    ln -sfn /usr/bin/python3 /usr/local/bin/python; \
+    python3 --version; uv --version
+
+# ---- Playwright (CLI + Chromium + toàn bộ system deps) -----------------------
+# playwright-core 1.59.1 là bản upstream dùng trong agent bundle; cài CLI cùng
+# version để `playwright`/`npx playwright` dùng được, kèm Chromium riêng của
+# Playwright và toàn bộ thư viện hệ thống mà Chromium cần.
+RUN set -eux; \
+    npm install -g "playwright@${PLAYWRIGHT_VERSION}"; \
+    playwright install --with-deps chromium; \
+    rm -rf /var/lib/apt/lists/*; \
+    playwright --version
+
+# ---- Google Chrome (amd64) / Chromium (arm64) --------------------------------
+# ZCode browser-use tìm browser theo thứ tự: executablePath truyền vào →
+# playwright chromium → /usr/bin/google-chrome-stable → /usr/bin/google-chrome
+# → /usr/bin/chromium. Chrome từ chối chạy khi UID=0 nếu không có --no-sandbox,
+# nên bọc binary gốc bằng wrapper thêm --no-sandbox (tắt bằng
+# ZCODE_CHROME_NO_SANDBOX=0)。arm64 没有 Google Chrome deb,fallback chromium。
+RUN set -eux; \
+    apt-get update -qq; \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      curl -fsSL --retry 3 "${CHROME_DEB_URL}" -o /tmp/google-chrome.deb; \
+      apt-get install -y --no-install-recommends /tmp/google-chrome.deb; \
+      rm -f /tmp/google-chrome.deb; \
+    else \
+      apt-get install -y --no-install-recommends chromium; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    if [ -x /opt/google/chrome/google-chrome ]; then \
+      REAL=/opt/google/chrome/google-chrome; \
+    else \
+      REAL="$(readlink -f "$(command -v chromium)")"; \
+    fi; \
+    mv "${REAL}" "${REAL}.real"; \
+    { \
+      echo '#!/bin/sh'; \
+      echo 'if [ "$(id -u)" = "0" ] && [ "${ZCODE_CHROME_NO_SANDBOX:-1}" != "0" ]; then'; \
+      printf '  exec "%s.real" --no-sandbox "$@"\n' "${REAL}"; \
+      echo 'fi'; \
+      printf 'exec "%s.real" "$@"\n' "${REAL}"; \
+    } > "${REAL}"; \
+    chmod 0755 "${REAL}"; \
+    ln -sfn "${REAL}" /usr/local/bin/chrome; \
+    /usr/local/bin/chrome --version
+
+# ---- Playwright browser wrappers --------------------------------------------
+# Playwright 的 Chromium / headless shell 在 UID=0 下同样会拒绝启动;套上同一
+# 个 --no-sandbox wrapper,保证 ZCode browser-use 与用户脚本都能直接跑。
+RUN set -eux; \
+    find /opt/ms-playwright -type f \( -name chrome -o -name chrome-headless-shell -o -name headless_shell \) -perm -u+x -print0 \
+    | while IFS= read -r -d '' bin; do \
+        [ -e "${bin}.real" ] && continue; \
+        mv "${bin}" "${bin}.real"; \
+        { \
+          echo '#!/bin/sh'; \
+          echo 'if [ "$(id -u)" = "0" ] && [ "${ZCODE_CHROME_NO_SANDBOX:-1}" != "0" ]; then'; \
+          printf '  exec "%s.real" --no-sandbox "$@"\n' "${bin}"; \
+          echo 'fi'; \
+          printf 'exec "%s.real" "$@"\n' "${bin}"; \
+        } > "${bin}"; \
+        chmod 0755 "${bin}"; \
+        echo "[zcode-web] wrapped ${bin}"; \
+      done
 
 WORKDIR /root/zcode/workspace
 

@@ -23,11 +23,11 @@
     "corepack prepare pnpm@10.33.2",
     "git clone --depth 1 ZCODE_REPO",
     "pnpm install                                    # 根 workspace（prepare 钩子需 HUSKY=0）",
-    "pnpm --dir apps/zcode-cli install               # 子 workspace 独立 lockfile",
     "node packages/desktop/scripts/prepare-agent-node-bundle.mjs",
     "pnpm --filter @zcode/server build",
     "pnpm --filter @zcode/web build",
-    "按 uname -m 选择 bundled-agents/linux-{x64,arm64}/glm → /opt/zcode-agent"
+    "按 uname -m 选择 bundled-agents/linux-{x64,arm64}/glm → /opt/zcode-agent",
+    "runtime: 安装 Python3/uv、Playwright CLI+Chromium+system deps、Google Chrome(amd64)/Chromium(arm64)"
   ],
   "buildEnv": {
     "CI": "1",
@@ -43,6 +43,20 @@
     "agent": "packages/desktop/bundled-agents/<platform>-<arch>/glm/zcode.cjs",
     "agentDirContents": "zcode.cjs / .node-bundle-meta.json / packages/{17 个官方插件,bundled-skills} / node-runtime/npm"
   },
+  "toolchain": {
+    "python": "Debian bookworm Python 3.11（python/python3/pip；PIP_BREAK_SYSTEM_PACKAGES=1）",
+    "uv": "0.13.7 → /usr/local/bin/uv + uvx（build ARG UV_VERSION 可覆盖）",
+    "playwright": "1.59.1（与上游 playwright-core 对齐；build ARG PLAYWRIGHT_VERSION）",
+    "playwrightBrowsers": "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright，chromium + install --with-deps",
+    "chrome": "amd64=Google Chrome stable；arm64=Debian Chromium；CHROME_BIN=/usr/local/bin/chrome",
+    "chromeNoSandbox": "root 运行时 wrapper 自动加 --no-sandbox（ZCODE_CHROME_NO_SANDBOX=0 关闭）"
+  },
+  "ci": {
+    "schedule": "每天 03:17 UTC 解析 zai-org/ZCode main 的 package.json 版本",
+    "autoUpdate": "GHCR 无 <version> tag 时构建并推送 latest/sha-<short>/<version>；已有则跳过",
+    "force": "workflow_dispatch 的 force=true 可强制重建",
+    "deploy": "docker compose pull && docker compose up -d（IMAGE_NAME=ghcr.io/6zev/zcode_web_docker, IMAGE_TAG=latest）"
+  },
   "runtimeEnv": {
     "PORT": "3030",
     "ZCODE_SERVER_HOST": "0.0.0.0",
@@ -53,7 +67,11 @@
     "ZCODE_SERVER_WORKSPACE": "/root/zcode/workspace",
     "ZCODE_AGENT_SERVER_COMMAND": "/app/agent/zcode.cjs",
     "ZCODE_AGENT_SERVER_ARGS_JSON": "[\"app-server\",\"--stdio\"]",
-    "ZCODE_SERVER_AUTH_TOKEN": "(可选：设了则 /api/* 与 /ws 需 ?token= 换 Cookie)"
+    "ZCODE_SERVER_AUTH_TOKEN": "(可选：设了则 /api/* 与 /ws 需 ?token= 换 Cookie)",
+    "CHROME_BIN": "/usr/local/bin/chrome",
+    "PUPPETEER_EXECUTABLE_PATH": "/usr/local/bin/chrome",
+    "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright",
+    "ZCODE_CHROME_NO_SANDBOX": "1（root 运行时自动 --no-sandbox；0=关闭）"
   },
   "invariants": [
     "HOME 与 ZCODE_DATA_BASE_DIR 必须成对设置，否则 setting/会话库与 task index/凭据分叉",
@@ -69,6 +87,7 @@
     "runtime": "服务端 200 + 静态资源 200 + WS 握手成功 + headless Chrome 渲染出登录页（0 console error）",
     "agent": "zcode.cjs plugins list 列出 16 个官方插件并从随包资源 seed；app-server --stdio 起停正常",
     "preflight": "对真实实例运行 zcode-preflight.sh：20 项通过 / 0 失败",
+    "toolchain": "Python/uv/Chrome/Playwright 已写入 Dockerfile，但本沙箱无 docker，尚未构建验证",
     "notVerified": "docker build 本身、容器内非 root 与 HEALTHCHECK（本沙箱无 docker）"
   }
 }

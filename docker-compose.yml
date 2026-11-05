@@ -13,6 +13,8 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
         APP_UID: ${APP_UID:-1000}
         APP_GID: ${APP_GID:-1000}
+        UV_VERSION: ${UV_VERSION:-0.13.7}
+        PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.59.1}
     image: ${IMAGE_NAME:-zcode-web}:${IMAGE_TAG:-3.17.2}
     container_name: zcode-web
     restart: unless-stopped
@@ -36,6 +38,9 @@ services:
       # 访问令牌。留空 = 不开启令牌保护(此时任何能访问本端口的人都能用,启动日志会大声警告)。
       # 生成: openssl rand -hex 24
       ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:-}
+      # Chrome chạy bằng root trong container cần --no-sandbox; wrapper trong
+      # image tự thêm cờ này. Đặt 0 để tắt (chỉ dùng khi chạy non-root + sandbox).
+      ZCODE_CHROME_NO_SANDBOX: ${ZCODE_CHROME_NO_SANDBOX:-1}
       # 可选代理
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -53,6 +58,8 @@ services:
       - ./token:/root/zcode/token
     security_opt:
       - no-new-privileges:true
+    # Chromium dùng /dev/shm; 64MB mặc định dễ crash khi mở nhiều tab.
+    shm_size: "1gb"
     stop_grace_period: 30s
 
   # ---------------------------------------------------------------------------
