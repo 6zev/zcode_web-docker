@@ -50,7 +50,7 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: hadolint（Dockerfile）
         uses: hadolint/hadolint-action@v3.5.0
@@ -66,7 +66,10 @@ jobs:
           bash -n zcode-preflight.sh
           python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('compose yaml ok')"
           python3 -c "import json; json.load(open('zcode-web.docker.json')); print('manifest json ok')"
-          grep -q 'FROM node:' Dockerfile
+          grep -q 'AS builder' Dockerfile
+          grep -q 'AS runtime' Dockerfile
+          grep -q 'ZCODE_AGENT_SERVER_COMMAND=/app/agent/zcode.cjs' Dockerfile
+          grep -q 'ZCODE_WEB_STATIC_ROOT=/app/packages/web/dist' Dockerfile
           mkdir -p workspace
 
   # 真构建：单平台时顺便 load 到本地跑冒烟测试；push 事件推送到 GHCR
@@ -77,7 +80,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 计算构建参数
         id: cfg
