@@ -62,15 +62,29 @@ RUN git clone --depth 1 --branch "${ZCODE_REF}" "${ZCODE_REPO}" /app \
  && git config --global --add safe.directory /app
 
 
-# 根 workspace 依赖
-RUN --mount=type=cache,id=zcode-pnpm-store,target=/pnpm/store \
-    pnpm install --no-frozen-lockfile
+# 根 workspace 安装(含 apps/zcode-cli 及其 packages 作为 importer)。
+# 加 retry:pnpm 10 在容器构建里偶发 ERR_PNPM_ENOENT(rename .../_tmp_* -> .../esbuild),
+# 属瞬时文件系统问题,重试即可。PUPPETEER_SKIP_DOWNLOAD:仓库里带了 puppeteer,
+# 这里用不到它自带的 Chromium(省 ~200MB 与数分钟)。
+ENV PUPPETEER_SKIP_DOWNLOAD=1 \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-# 注意：不要在这里对子 workspace 再跑 `pnpm --dir apps/zcode-cli install`。
-# apps/zcode-cli 的 pnpm-workspace.yaml 只声明 packages/* 与 tools/*，而它的 packages/adapters
-# 依赖根 workspace 的包（如 @zcode/model-option-map = workspace:*）。单独在子目录 install 会报
-# ERR_PNPM_WORKSPACE_PKG_NOT_FOUND（已实测）。根 install 已经把 apps/zcode-cli 及其 packages
-# 作为 importer 全部装好，agent bundle 构建脚本也走根 node_modules，因此只需根 install。
+RUN --mount=type=cache,id=zcode-pnpm-store,target=/pnpm/store \
+    set -eux; \
+    for attempt in 1 2 3; do \
+      echo "[zcode-web] pnpm install (attempt ${attempt}/3)"; \
+      pnpm install --no-frozen-lockfile && break; \
+      if [ "${attempt}" = "3" ]; then echo "[zcode-web] pnpm install 连续 3 次失败" >&2; exit 1; fi; \
+      rm -rf /app/node_modules /app/packages/*/node_modules /app/apps/*/node_modules; \
+      sleep 10; \
+    done; \
+    pnpm --version
+
+# 注意:不要在这里对子 workspace 再跑 `pnpm --dir apps/zcode-cli install`。
+# apps/zcode-cli 的 pnpm-workspace.yaml 只声明 packages/* 与 tools/*,而它的 packages/adapters
+# 依赖根 workspace 的包(如 @zcode/model-option-map = workspace:*),单独在子目录 install 会报
+# ERR_PNPM_WORKSPACE_PKG_NOT_FOUND(CI 与本地均实测复现)。上面这一次根 install 已经把
+# apps/zcode-cli 及其 packages 作为 importer 全部装好,agent bundle 构建脚本走的也是根 node_modules。
 
 RUN node /app/packages/desktop/scripts/prepare-agent-node-bundle.mjs
 
