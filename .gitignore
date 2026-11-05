@@ -3,6 +3,7 @@
 .env.local
 .cache/
 workspace/
+.dsh-meow/
 screenshots/*.tmp
 *.log
 node_modules/
