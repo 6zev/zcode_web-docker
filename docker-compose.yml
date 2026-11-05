@@ -17,10 +17,11 @@ services:
     container_name: zcode-web
     restart: unless-stopped
     init: true
-    # 不对外发布端口:zcode 只在内部网络里给网关访问。
-    # 想临时直连排查(绕过网关)就把下面这行取消注释,仅绑本机回环。
-    # ports:
-    #   - "127.0.0.1:3030:3030"
+    # 对外入口:用 zcode 自带的令牌保护(ZCODE_SERVER_AUTH_TOKEN),不需要任何代理容器。
+    # /api/* 与 /ws 都要求令牌;首次访问 http://<host>:3030/?token=<令牌> 换成 Cookie 即可。
+    # 需要 TLS/限速/只开一个端口时,再叠加 --profile nginx 或 --profile caddy。
+    ports:
+      - "${BIND_HOST:-0.0.0.0}:${BIND_PORT:-3030}:3030"
     environment:
       PORT: "3030"
       HOST: "0.0.0.0"
@@ -31,7 +32,8 @@ services:
       ZCODE_WEB_STATIC_ROOT: /app/packages/web/dist
       TZ: ${TZ:-Asia/Saigon}
       # 可选访问令牌（见 .env.example）
-      ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:-}
+      # 必填:没配就报错,避免不小心把服务公开出去。生成: openssl rand -hex 24
+      ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:?missing — set ZCODE_SERVER_AUTH_TOKEN in .env (openssl rand -hex 24)}
       # 可选代理
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
@@ -45,17 +47,20 @@ services:
       - zcode-data:/root/zcode/data
       # 默认工作目录：ZCode 在这里读写你的代码
       - ${WORKSPACE_DIR:-./workspace}:/root/zcode/workspace
+      # 生成的令牌文本留一份在这里,便于随时查看/轮换(数据卷的一部分)
+      - ./token:/root/zcode/token
     security_opt:
       - no-new-privileges:true
     stop_grace_period: 30s
 
   # ---------------------------------------------------------------------------
-  # 网关 A(默认,轻):nginx:1.27-alpine —— Basic Auth + 反代,内存 ~5-10MB
-  #   - zcode 的 3030 不发布,只有网关能访问
-  #   - 所有请求(含 WebSocket /ws)先过 Basic Auth 再转发
-  #   - 默认账号 zcode / 口令 zcode,上线前必须用 GATEWAY_AUTH_PASSWORD 改掉
+  # 可选网关(默认不启用,因为 zcode 自带令牌已经够用):
+  #   docker compose --profile nginx up -d
+  # 场景:需要 TLS 终止 / 统一限速 / IP 白名单,或想让端口只开一个 8080。
+  # 注意开着网关时建议把 zcode-web 的 ports 注释掉,避免绕过网关直连 3030。
   # ---------------------------------------------------------------------------
   gateway:
+    profiles: ["nginx"]
     build:
       context: ./gateway
       dockerfile: Dockerfile
@@ -91,9 +96,7 @@ services:
       - no-new-privileges:true
 
   # ---------------------------------------------------------------------------
-  # 网关 B(可选,功能多):caddy —— 自动 HTTPS / 看板 / 更少配置
-  #   启用:docker compose --profile caddy up -d
-  #   然后访问 compose 里映射的端口(默认 8081),或把网关 A 停掉后改用 8080
+  # 可选网关 C:caddy —— 自动 HTTPS / 更少配置(docker compose --profile caddy up -d)
   # ---------------------------------------------------------------------------
   gateway-caddy:
     profiles: ["caddy"]
@@ -121,11 +124,6 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # ---------------------------------------------------------------------------
-  # 网关 C(最轻,零额外容器):不用任何代理,靠 zcode 自带的令牌
-  #   设 ZCODE_SERVER_AUTH_TOKEN=<随机串>,给 zcode-web 取消 ports 注释,
-  #   首次访问 http://<host>:3030/?token=<随机串> 换成 Cookie 即可(/api 与 /ws 都受保护)。
-  # ---------------------------------------------------------------------------
 
 volumes:
   zcode-data:

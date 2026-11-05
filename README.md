@@ -3,26 +3,18 @@
 官方 ZCode Web(上游 [`zai-org/ZCode`](https://github.com/zai-org/ZCode),v3.17.2)的**单镜像 Docker 部署**:
 一个容器里跑 Web UI + `@zcode/server`(HTTP/WS)+ Agent CLI `zcode.cjs`(stdio 拉起),单进程单端口。
 
-镜像已由 GitHub Actions 构建并推送到 GHCR:
-
-> 推荐用仓库里的 compose:它会额外起一个**网关容器**(Caddy 反代 + Basic Auth),zcode 本体不再对外发布端口。
+镜像是单容器、单端口,访问保护直接用 **zcode 自带的令牌**(零额外容器、零额外内存):
 
 ```bash
-cp .env.example .env      # 至少改掉 GATEWAY_AUTH_PASSWORD
+cd /root/zcode-web-docker
+cp .env.example .env
+echo "ZCODE_SERVER_AUTH_TOKEN=$(openssl rand -hex 24)" >> .env   # 生成令牌
+cat .env | grep TOKEN                                            # 记下它
 docker compose up -d --build
-# 访问 http://<服务器IP>:8080/ : 先过网关口令,再做 Z.ai OAuth 登录
+# 首次访问: http://<服务器IP>:3030/?token=<令牌>   → 换成 Cookie 后正常用
 ```
 
-只想直连镜像(不经网关,需自行保证不暴露):
-
-```bash
-docker pull ghcr.io/6zev/zcode_web_docker:latest
-docker run -d --name zcode-web -p 127.0.0.1:3030:3030 \
-  -v zcode-data:/root/zcode/data \
-  -v /你的/代码目录:/root/zcode/workspace \
-  ghcr.io/6zev/zcode_web_docker:latest
-```
-
+之后浏览器直接开 `http://<IP>:3030/` 即可(令牌已在 Cookie 里);换令牌会让所有旧 Cookie 立刻失效。
 凭据落在 `/root/zcode/data` 卷,重建容器不掉登录。
 
 > 完整文档见 [DETAILED-README.md](DETAILED-README.md):构建细节、环境变量、验证方法、常见问题。
@@ -64,23 +56,27 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 - 卷 `/root/zcode/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/root/zcode/workspace` 是 ZCode 的默认工作目录。
 - 镜像默认以 **root** 运行,入口脚本会自动把 `/root/zcode/data` 与 `/root/zcode/workspace` 的属主修正为当前 UID,所以 bind mount 到新建的空目录也不会 `EACCES`。想跑非 root:`--user 1000:1000` + `sudo chown -R 1000:1000 <挂载目录>`。
 
-## 访问保护(网关)
+## 访问保护
+
+默认方案:**用 zcode 自带的令牌**(`ZCODE_SERVER_AUTH_TOKEN`),不需要任何代理容器。
 
 ```
-浏览器 ──Basic Auth──▶ gateway(nginx:1.27-alpine,对外 8080) ──▶ zcode-web:3030(不发布端口)
+浏览器 ──?token=<令牌>(一次)──▶ Cookie ──▶ zcode-web:3030
+                                  /api/* 与 /ws 全部校验令牌
 ```
 
-- 所有请求(含 WebSocket `/ws`)都必须先过 Basic Auth;未认证 401,不会碰到 zcode。
-- 改口令:改 `.env` 的 `GATEWAY_AUTH_PASSWORD` 再 `docker compose up -d gateway`(口令在容器启动时算成 apr1 哈希);也可以直接给 `GATEWAY_AUTH_HASH`。
-- 限速:`GATEWAY_RATE`(默认 20r/s)+ `GATEWAY_BURST`(默认 200)。**burst 给小了浏览器首屏会 503**,调大即可。
-- 上游用变量 + Docker 内嵌 DNS 解析,**zcode 晚启动或重建容器都不会让网关启动失败**。
+- 令牌保护的是 `/api/*` 与 `/ws`(也就是所有真实数据和操作);静态页面本身不含数据。
+- 三种带令牌的方式:`?token=<令牌>`(会写 Cookie,最方便)、`Authorization: Bearer <令牌>`、或 Cookie。
+- 令牌没配时 `docker compose up` **直接报错**,不会静默变成公开服务。
+- 令牌留在 `./token/token.txt`(bind mount,方便随时查看/轮换)。
+- 轮换:改 `.env` 里的值 → `docker compose up -d zcode-web`。
 
-### 三种网关,按需选(默认 A)
+### 需要 TLS / 限速 / 只开一个端口时,再加网关(可选)
 
-| 方案 | 怎么做 | 开销 |
+| 方案 | 命令 | 开销 |
 |---|---|---|
-| **A · nginx(默认)** | `docker compose up -d`(会在本地构建网关镜像) | 镜像 ~25MB,内存约 5–10MB |
-| **B · Caddy(功能多)** | `docker compose --profile caddy up -d`(另有自动 HTTPS、访问日志面板) | 镜像 ~24MB,内存约 20–40MB |
-| **C · 零额外容器** | 不用代理:给 zcode-web 打开 `ports`,并设 `ZCODE_SERVER_AUTH_TOKEN=<随机串>`;首次访问 `http://host:3030/?token=<随机串>` 换 Cookie 即可(`/api` 与 `/ws` 都受保护) | 0 额外内存,但没有 TLS 终止、没有统一限速 |
+| **默认 · 只用令牌** | `docker compose up -d` | 0(无额外容器) |
+| nginx 网关(反代 + Basic Auth + 限速) | `docker compose --profile nginx up -d` | 镜像 ~25MB,内存 ~5–10MB |
+| Caddy 网关(自动 HTTPS) | `docker compose --profile caddy up -d` | 镜像 ~24MB,内存 ~20–40MB |
 
-要 HTTPS:方案 A 挂证书并打开 `nginx.conf` 里注释的两行(把端口映射到 443);方案 B 直接 `GATEWAY_TLS="tls you@example.com"`。
+开着网关时,建议把 compose 里 zcode-web 的 `ports:` 注释掉,只留网关端口,避免绕过网关直连 3030(令牌仍然有效,属于双保险)。
