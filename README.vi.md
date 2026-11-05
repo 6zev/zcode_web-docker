@@ -62,8 +62,8 @@ Muốn ghim version: đặt `IMAGE_TAG=3.17.2` (hoặc version mới). Build tay
 
 | Mount | Nội dung |
 |---|---|
-| `zcode-data` → `/root/zcode/data` | credentials OAuth, session DB, task index, plugin cache, log |
-| `${WORKSPACE_DIR}` → `/root/zcode/workspace` | thư mục mã nguồn agent làm việc |
+| `zcode-data` → `/root/.zcode` | credentials OAuth, session DB, task index, plugin cache, log (default của ZCode) |
+| `${WORKSPACE_DIR}` → `/root` | thư mục làm việc của agent (workspace = /root) |
 
 Xóa container không mất login; `docker compose down` vẫn giữ volume.
 
@@ -73,8 +73,8 @@ Xóa container không mất login; `docker compose down` vẫn giữ volume.
 docker build -t zcode-web:local .
 docker run -d --name zcode-web -p 3030:3030 \
   -e ZCODE_SERVER_AUTH_TOKEN='<token>' \
-  -v zcode-data:/root/zcode/data \
-  -v "$PWD/workspace:/root/zcode/workspace" \
+  -v zcode-data:/root/.zcode \
+  -v "$PWD/workspace:/root" \
   --shm-size=1g \
   --restart unless-stopped \
   zcode-web:local

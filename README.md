@@ -17,7 +17,7 @@ docker compose up -d --build
 真要在无令牌状态下跑,请把 `BIND_HOST` 设成 `127.0.0.1`,别直接暴露到公网。
 
 之后浏览器直接开 `http://<IP>:3030/` 即可(令牌已在 Cookie 里);换令牌会让所有旧 Cookie 立刻失效。
-凭据落在 `/root/zcode/data` 卷,重建容器不掉登录。
+数据用 ZCode 原生默认 `~/.zcode`(命名卷 `zcode-data`),工作区就是 `/root`;重建容器不掉登录。
 
 > 完整文档见 [DETAILED-README.md](DETAILED-README.md):构建细节、环境变量、验证方法、常见问题。
 
@@ -73,7 +73,7 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 - 容器需能访问 `zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`(登录与推理);不通时给容器配 `HTTPS_PROXY`。
 - 只用 Docker 跑镜像:**不需要**本地 Node/pnpm。要自己构建镜像:构建机需能出网,首次构建约 10–25 分钟
   (含 Python/uv/Chrome/Playwright 后体积与时间会再增加一些)。
-- 卷 `/root/zcode/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/root/zcode/workspace` 是 ZCode 的默认工作目录。
+- 数据用 ZCode 原生默认 `~/.zcode`(命名卷 `zcode-data`,含凭据、会话库、插件缓存);工作区即 `/root`(compose 把 `${WORKSPACE_DIR}` 挂到 `/root`)。
 
 ## 纯浏览器模式补丁
 

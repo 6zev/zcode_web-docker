@@ -16,7 +16,7 @@ docker compose up -d --build  # 首次:拉官方仓库 + 装依赖 + 构建(约 
 ```
 
 打开 `http://<服务器IP>:3030/` → 点登录 → 在浏览器里完成 Z.ai OAuth
-(容器需要能访问 `zcode.z.ai`)。凭据落在 `/root/zcode/data` 卷,`docker compose up -d --force-recreate`
+(容器需要能访问 `zcode.z.ai`)。凭据落在 ZCode 原生默认 `~/.zcode`(命名卷 `zcode-data`),`docker compose up -d --force-recreate`
 不会掉登录。
 
 不用 compose:
@@ -24,8 +24,8 @@ docker compose up -d --build  # 首次:拉官方仓库 + 装依赖 + 构建(约 
 ```bash
 docker build -t zcode-web:3.17.2 .
 docker run -d --name zcode-web -p 3030:3030 \
-  -v zcode-data:/root/zcode/data \
-  -v /你的/代码目录:/root/zcode/workspace \
+  -v zcode-data:/root/.zcode \
+  -v /你的/代码目录:/root \
   zcode-web:3.17.2
 ```
 
@@ -33,7 +33,7 @@ docker run -d --name zcode-web -p 3030:3030 \
 
 | 文件 | 作用 |
 |---|---|
-| [docker-compose.yml](docker-compose.yml) | 一条命令起服务,端口映射,`/root/zcode/data` + `/root/zcode/workspace` 卷 |
+| [docker-compose.yml](docker-compose.yml) | 一条命令起服务,端口映射,`/root/.zcode`(数据卷)+ `/root`(工作区) |
 | [docker-entrypoint.sh](docker-entrypoint.sh) | 准备数据目录、首次铺默认设置、打印启动诊断 |
 | [zcode-preflight.sh](zcode-preflight.sh) | 镜像自检(产物/权限/网络/健康),进容器执行 |
 | [.env.example](.env.example) | 构建/运行变量 |
@@ -72,33 +72,29 @@ pnpm --filter @zcode/web build                 # → packages/web/dist/
 | `ZCODE_SERVER_HOST` | `0.0.0.0` | 绑定地址;置空时 hono 把 `undefined` 传给 `listen`,实际也是全部网卡 |
 | `ZCODE_WEB_STATIC_ROOT` | `/app/packages/web/dist` | UI 静态根,必须含 `index.html`,且只能挂在 `/`(无 basePath) |
 | `HOME` | `/root` | **决定** settings、session DB(`~/.zcode/cli/db`)、插件缓存 |
-| `ZCODE_DATA_BASE_DIR` | `/root/zcode/data` | **决定** `{base}/.zcode/v2`(凭据、tasks-index、provider 配置) |
-| `ZCODE_STORAGE_DIR` | `/root/zcode/data/.zcode` | 与默认值等价(exec/clipboard/SEA 用),保留无害 |
-| `ZCODE_SERVER_WORKSPACE` | `/root/zcode/workspace` | 默认工作区(未设则取 `process.cwd()`) |
+| `ZCODE_SERVER_WORKSPACE` | `/root` | 对外声明的工作区;草稿目录也优先用它。数据目录用 ZCode 原生默认 `~/.zcode`,不再注入 `ZCODE_DATA_BASE_DIR` / `ZCODE_STORAGE_DIR` / `ZCODE_WORKSPACE` |
 | `ZCODE_AGENT_SERVER_COMMAND` | `/app/agent/zcode.cjs` | Agent 入口;显式设置优先级最高 |
 | `ZCODE_AGENT_SERVER_ARGS_JSON` | `["app-server","--stdio"]` | 必须是 JSON 字符串数组 |
 | `ZCODE_SERVER_AUTH_TOKEN` | *(建议)* | 设了之后 `/api/*`、`/ws` 要求令牌,首访需 `http://host:3030/?token=<值>` 换 Cookie |
 
-> 只有 `HOME` + `ZCODE_DATA_BASE_DIR` 是**必须**成对设置的:`HOME` 管 settings/会话库,
-> `ZCODE_DATA_BASE_DIR` 管 `v2/`。只设后者会让状态分裂到 `/root/.zcode` 与 `/root/zcode/data` 两处。
+> 数据路径回归 ZCode 原生默认:`HOME=/root` → settings/会话库/凭据全在 `/root/.zcode`;不再需要成对设置任何数据目录变量。
 > 另:`ZCODE_SERVER_TOKEN` 是死变量(只影响 `/api/server-info` 自述),别用它当门禁。
 
-卷:`/root/zcode/data`(必须持久化:登录、会话、插件缓存)、`/root/zcode/workspace`(你的代码)。
+卷:`/root/.zcode`(必须持久化:登录、会话、插件缓存)、`/root`(你的代码,compose 挂 `${WORKSPACE_DIR}`)。
 
-> 运行身份:镜像默认 **root**(挂载卷、改属主、临时装包都最省事);入口脚本启动时会把 `/root/zcode/data` 与
-> `/root/zcode/workspace` 的属主修正为当前 UID,所以 bind mount 到宿主机上新建的空目录也能直接跑。
+> 运行身份:镜像**始终以 root** 运行;入口脚本只建 `~/.zcode` 子目录并铺默认设置。
 > 或先以 root 起一次让入口脚本把属主改好。
 
 ## 5. 构建后怎么验
 
 ```bash
 docker compose ps                        # health: healthy
-docker compose logs -f zcode-web         # [zcode-web] workspace=/root/zcode/workspace data=/root/zcode/data/.zcode ...
+docker compose logs -f zcode-web         # [zcode-web] data=/root/.zcode workspace=/root ...
 docker compose exec zcode-web /usr/local/bin/zcode-preflight.sh
 ```
 
 自检脚本会逐项检查:Node ≥24 与 `node:sqlite`、`entry-http.js`、`web/dist/index.html`、
-Agent 入口与随包 `packages/bundled-skills`/`npm`、`/root/zcode/data` 与 `/root/zcode/workspace` 可写性、
+Agent 入口与随包 `packages/bundled-skills`/`npm`、`/root/.zcode` 与 `/root` 可写性、
 `zcode.z.ai` 连通性、`/api/server-info` 与首页响应。
 
 ## 6. 常见问题

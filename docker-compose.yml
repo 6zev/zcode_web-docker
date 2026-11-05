@@ -27,9 +27,6 @@ services:
       PORT: "3030"
       HOST: "0.0.0.0"
       ZCODE_SERVER_HOST: "0.0.0.0"
-      ZCODE_DATA_BASE_DIR: /root/zcode/data
-      ZCODE_STORAGE_DIR: /root/zcode/data/.zcode
-      ZCODE_WORKSPACE: /root/zcode/workspace
       ZCODE_WEB_STATIC_ROOT: /app/packages/web/dist
       TZ: ${TZ:-Asia/Saigon}
       # 访问令牌。留空 = 不开启令牌保护(此时任何能访问本端口的人都能用,启动日志会大声警告)。
@@ -44,12 +41,14 @@ services:
     # 运行身份:始终 root。镜像与 compose 都固定 user 0:0,入口脚本保证目录可写。
     user: "0:0"
     volumes:
-      # 凭据 / 会话库 / 插件缓存 / 日志：必须持久化，否则重建容器要重新登录
-      - zcode-data:/root/zcode/data
-      # 默认工作目录：ZCode 在这里读写你的代码
-      - ${WORKSPACE_DIR:-./workspace}:/root/zcode/workspace
+      # ZCode 原生数据目录(~/.zcode):凭据 / 会话库 / 插件缓存 / 日志。
+      # 必须持久化，否则重建容器要重新登录。
+      - zcode-data:/root/.zcode
+      # 工作区 = /root:宿主机目录直接映射为 agent 的工作根目录。
+      # (/root/.zcode 是更深的挂载点,不会被子目录遮住。)
+      - ${WORKSPACE_DIR:-./workspace}:/root
       # 生成的令牌文本留一份在这里,便于随时查看/轮换(数据卷的一部分)
-      - ./token:/root/zcode/token
+      - ./token:/root/.zcode/token
     security_opt:
       - no-new-privileges:true
     # Chromium dùng /dev/shm; 64MB mặc định dễ crash khi mở nhiều tab.

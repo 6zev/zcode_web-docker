@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # ZCode Web 容器入口:准备持久化目录、铺默认配置、访问保护提示,然后交给 CMD 启动服务。
-# 本镜像始终以 root 运行;不检测 UID、不降权。
+# 本镜像始终以 root 运行;数据用 ZCode 原生默认 ~/.zcode,工作区默认 $HOME(/root)。
 set -euo pipefail
 
-DATA_DIR="${ZCODE_DATA_BASE_DIR:-${ZCODE_DATA_DIR:-/root/zcode/data}}"
-ZCODE_DIR="${DATA_DIR}/.zcode"
-WORKSPACE_DIR="${ZCODE_WORKSPACE:-/root/zcode/workspace}"
+ZCODE_DIR="${ZCODE_DATA_BASE_DIR:+${ZCODE_DATA_BASE_DIR%/}/.zcode}"
+ZCODE_DIR="${ZCODE_DIR:-${HOME:-/root}/.zcode}"
+WORKSPACE_DIR="${ZCODE_WORKSPACE:-${ZCODE_SERVER_WORKSPACE:-${HOME:-/root}}}"
 
 log() { printf '[zcode-web] %s\n' "$*"; }
 
 export HOME="${HOME:-/root}"
-export ZCODE_DATA_BASE_DIR="${DATA_DIR}"
-export ZCODE_STORAGE_DIR="${ZCODE_STORAGE_DIR:-${DATA_DIR}/.zcode}"
 
 # 把设置文件按需铺好
 provision_settings() {
@@ -38,7 +36,7 @@ else
   log "访问保护: 已启用令牌(/api/* 与 /ws 需要令牌;首次访问 /?token=<令牌> 换 Cookie)"
 fi
 
-# ---- 1) root 准备目录与默认设置 ----
+# ---- 1) 准备 ZCode 原生数据目录(~/.zcode)与工作区 ----
 mkdir -p "${ZCODE_DIR}/v2" "${ZCODE_DIR}/cli" "${ZCODE_DIR}/logs" "${WORKSPACE_DIR}"
 provision_settings
 
@@ -49,7 +47,7 @@ STATIC_ROOT="${ZCODE_WEB_STATIC_ROOT:-/app/packages/web/dist}"
 [ -f "${STATIC_ROOT}/index.html" ] || log "警告: 未找到前端静态资源 ${STATIC_ROOT}/index.html"
 [ -x "${ZCODE_AGENT_SERVER_COMMAND:-/app/agent/zcode.cjs}" ] || log "警告: agent 入口不可执行 ${ZCODE_AGENT_SERVER_COMMAND:-/app/agent/zcode.cjs}"
 
-log "UID=$(id -u),始终以 root 运行;workspace=${WORKSPACE_DIR} data=${ZCODE_DIR} port=${ZCODE_PORT:-3030} host=${ZCODE_SERVER_HOST:-0.0.0.0} agent=${ZCODE_AGENT_SERVER_COMMAND:-auto}"
+log "UID=$(id -u),始终以 root 运行;data=${ZCODE_DIR}(ZCode 原生 ~/.zcode) workspace=${WORKSPACE_DIR} port=${ZCODE_PORT:-3030} host=${ZCODE_SERVER_HOST:-0.0.0.0} agent=${ZCODE_AGENT_SERVER_COMMAND:-auto}"
 log "首次使用请在浏览器打开 http://<host>:${ZCODE_PORT:-3030}/ 完成 Z.ai OAuth 登录(容器需能访问 zcode.z.ai)"
 
 exec "$@"

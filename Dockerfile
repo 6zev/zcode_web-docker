@@ -7,8 +7,8 @@
 #
 # 构建:  docker build -t zcode-web:3.17.2 .
 # 运行:  docker run -d --name zcode-web -p 3030:3030 \
-#          -v zcode-data:/root/zcode/data \
-#          -v "$PWD/workspace:/root/zcode/workspace" zcode-web:3.17.2
+#          -v zcode-data:/root/.zcode \
+#          -v "$PWD/workspace:/root" zcode-web:3.17.2
 # 访问:  http://<host>:3030/        （登录走 Z.ai OAuth，需容器能访问 zcode.z.ai）
 #
 # 上游版本对齐: Node 24.14.0 / pnpm 10.33.2（mise.toml）、ZCode v3.17.2
@@ -135,14 +135,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ZCODE_SERVER_HOST=0.0.0.0 \
     ZCODE_WEB_STATIC_ROOT=/app/packages/web/dist \
     HOME=/root \
-    ZCODE_DATA_BASE_DIR=/root/zcode/data \
-    ZCODE_STORAGE_DIR=/root/zcode/data/.zcode \
     ZCODE_AGENT_SERVER_COMMAND=/app/agent/zcode.cjs \
     ZCODE_AGENT_SERVER_ARGS_JSON='["app-server","--stdio"]' \
-    ZCODE_ROOT=/root/zcode \
-    ZCODE_DATA_DIR=/root/zcode/data \
-    ZCODE_WORKSPACE=/root/zcode/workspace \
-    ZCODE_SERVER_WORKSPACE=/root/zcode/workspace \
+    ZCODE_SERVER_WORKSPACE=/root \
     PYTHONUNBUFFERED=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     UV_LINK_MODE=copy \
@@ -244,7 +239,7 @@ RUN set -eux; \
         echo "[zcode-web] wrapped ${bin}"; \
       done
 
-WORKDIR /root/zcode/workspace
+WORKDIR /root
 
 # 服务端与依赖。entry-http.js 把 hono / ws / ssh2 / node-pty / undici / axios / form-data /
 # yaml / node-forge 等全部 external 化，运行期必须有完整 node_modules。
@@ -261,12 +256,10 @@ COPY --from=builder /app/packages/web/dist /app/packages/web/dist
 COPY --from=builder /opt/zcode-agent /app/agent
 COPY --from=builder /app/apps/zcode-cli/package.json /app/apps/zcode-cli/package.json
 
-# 数据与工作区都放在 HOME(/root)下:
-#   /root/zcode/data      凭据 / 会话库 / task index / 插件缓存 / 日志
-#   /root/zcode/workspace 默认工作目录(ZCode 在这里读写你的代码)
-# 想换位置:覆盖 ZCODE_DATA_DIR 与 ZCODE_WORKSPACE 两个环境变量即可。
+# 数据用 ZCode 原生默认:~/.zcode(凭据 / 会话库 / task index / 插件缓存 / 日志);
+# 工作区就是 HOME(/root),由 ZCODE_SERVER_WORKSPACE 对外声明。
 RUN set -eux; \
-    mkdir -p /root /root/zcode/data /root/zcode/workspace /app/agent; \
+    mkdir -p /root/.zcode /app/agent; \
     chmod +x /app/agent/zcode.cjs; \
     if find /app/node_modules -name 'pty.node' -print -quit | grep -q .; then \
       echo "[zcode-web] node-pty 原生模块就位"; \
@@ -278,7 +271,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY zcode-preflight.sh /usr/local/bin/zcode-preflight.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/zcode-preflight.sh
 
-VOLUME ["/root/zcode/data", "/root/zcode/workspace"]
+VOLUME ["/root/.zcode"]
 EXPOSE 3030
 
 # 运行身份:始终以 root 运行,不提供非 root 切换。

@@ -15,8 +15,8 @@
       "ws": "same-port (/ws)"
     },
     "volumes": {
-      "/root/zcode/data": "HOME 下的数据目录:setting.json / credentials.json / tasks-index.sqlite / cli session DB / 插件 cache / 日志",
-      "/root/zcode/workspace": "默认工作目录(ZCODE_WORKSPACE / ZCODE_SERVER_WORKSPACE)"
+      "/root/.zcode": "ZCode 原生默认数据目录:setting.json / credentials.json / tasks-index.sqlite / cli session DB / 插件 cache / 日志",
+      "/root": "工作区(ZCODE_SERVER_WORKSPACE=/root;compose 把 ${WORKSPACE_DIR} 挂到 /root)"
     }
   },
   "buildSteps": [
@@ -62,9 +62,7 @@
     "ZCODE_SERVER_HOST": "0.0.0.0",
     "ZCODE_WEB_STATIC_ROOT": "/app/packages/web/dist",
     "HOME": "/root",
-    "ZCODE_DATA_BASE_DIR": "/root/zcode/data",
-    "ZCODE_STORAGE_DIR": "/root/zcode/data/.zcode",
-    "ZCODE_SERVER_WORKSPACE": "/root/zcode/workspace",
+    "ZCODE_SERVER_WORKSPACE": "/root",
     "ZCODE_AGENT_SERVER_COMMAND": "/app/agent/zcode.cjs",
     "ZCODE_AGENT_SERVER_ARGS_JSON": "[\"app-server\",\"--stdio\"]",
     "ZCODE_SERVER_AUTH_TOKEN": "(可选：设了则 /api/* 与 /ws 需 ?token= 换 Cookie)",
@@ -74,8 +72,7 @@
     "ZCODE_CHROME_NO_SANDBOX": "1（root 运行时自动 --no-sandbox；0=关闭）"
   },
   "invariants": [
-    "HOME 与 ZCODE_DATA_BASE_DIR 必须成对设置，否则 setting/会话库与 task index/凭据分叉",
-    "ZCODE_STORAGE_DIR 不决定 session DB，与默认值等价（可留）",
+    "数据路径用 ZCode 原生默认:HOME=/root → ~/.zcode(settings/会话库/凭据);不再注入 ZCODE_DATA_BASE_DIR/ZCODE_STORAGE_DIR/ZCODE_WORKSPACE",
     "ZCODE_SERVER_TOKEN 是死变量，不能当门禁",
     "agent 必须整目录就位：插件与 bundled-skills 按 dirname(zcode.cjs) 就近解析",
     "前端静态根缺 index.html 时端口正常但全 404（最典型的静默失败）",
@@ -92,7 +89,7 @@
   },
   "patch": {
     "file": "patches/standalone-web-local-host.patch",
-    "purpose": "纯浏览器模式可用:project service 把 hostId=local 归一到服务器自身 ownerHostId,允许浏览目录/创建 project/准备草稿;prepareSession 对显式 local 的远端请求放行;草稿目录优先用 ZCODE_SERVER_WORKSPACE",
+    "purpose": "纯浏览器模式可用:project service 把 hostId=local 归一到服务器自身 ownerHostId,允许浏览目录/创建 project/准备草稿;prepareSession 对显式 local 的远端请求放行;草稿目录优先用 ZCODE_SERVER_WORKSPACE;草稿目录优先 ZCODE_SERVER_WORKSPACE(默认 /root)",
     "verified": "vitest 单测 5/5(对真实 createProjectService):before 复现 host-offline/remote-project-required,after 全绿;entry-http 重建后本地 boot server-info OK;channel mapper 只改 workspace identity,不改 hostId"
   }
 }

@@ -71,7 +71,9 @@ else
 fi
 
 section "数据目录"
-for d in "${HOME:-/root}" "${ZCODE_DATA_BASE_DIR:-/root/zcode/data}" "${ZCODE_STORAGE_DIR:-/root/zcode/data/.zcode}" "${ZCODE_WORKSPACE:-/root/zcode/workspace}"; do
+ZC_DATA_DIR="${ZCODE_DATA_BASE_DIR:+${ZCODE_DATA_BASE_DIR%/}/.zcode}"
+ZC_DATA_DIR="${ZC_DATA_DIR:-${HOME:-/root}/.zcode}"
+for d in "${HOME:-/root}" "${ZC_DATA_DIR}" "${ZC_DATA_DIR}/v2" "${ZCODE_WORKSPACE:-${ZCODE_SERVER_WORKSPACE:-${HOME:-/root}}}"; do
   if [ -d "${d}" ]; then
     if [ -w "${d}" ]; then ok "可写 ${d}"; else bad "不可写 ${d}(启动会 exitCode 1 或 agent 无法落库)"; fi
   else

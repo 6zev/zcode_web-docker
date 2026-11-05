@@ -127,15 +127,14 @@ jobs:
       - name: 不设令牌可裸跑,但入口脚本必须打印警告
         run: |
           set -eux
-          d="$(mktemp -d)"; mkdir -p "$d/data"
+          d="$(mktemp -d)"
           chmod 755 "$d"; cp docker-entrypoint.sh "$d/ep.sh"; chmod 755 "$d/ep.sh"
-          docker run --rm -v "$d/ep.sh:/ep.sh:ro" -v "$d/data:/data" \
-            -e ZCODE_DATA_BASE_DIR=/data -e ZCODE_WORKSPACE=/data/ws \
+          docker run --rm -v "$d/ep.sh:/ep.sh:ro" \
             bash:5.2.37-alpine3.22 bash /ep.sh sh -c 'echo __STARTED__' > "$d/no-token.log" 2>&1
           grep -q "未设置 ZCODE_SERVER_AUTH_TOKEN" "$d/no-token.log"
           grep -q "__STARTED__" "$d/no-token.log"
-          docker run --rm -v "$d/ep.sh:/ep.sh:ro" -v "$d/data:/data" \
-            -e ZCODE_SERVER_AUTH_TOKEN=abc -e ZCODE_DATA_BASE_DIR=/data -e ZCODE_WORKSPACE=/data/ws \
+          docker run --rm -v "$d/ep.sh:/ep.sh:ro" \
+            -e ZCODE_SERVER_AUTH_TOKEN=abc \
             bash:5.2.37-alpine3.22 bash /ep.sh sh -c 'echo __STARTED__' > "$d/with-token.log" 2>&1
           grep -q "已启用令牌" "$d/with-token.log"
           echo "入口脚本行为正确:无令牌=警告且继续启动;有令牌=提示已启用"
