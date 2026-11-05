@@ -66,16 +66,12 @@ RUN git clone --depth 1 --branch "${ZCODE_REF}" "${ZCODE_REPO}" /app \
 RUN --mount=type=cache,id=zcode-pnpm-store,target=/pnpm/store \
     pnpm install --no-frozen-lockfile
 
-# 子 workspace 依赖。apps/zcode-cli 有独立 lockfile/workspace；
-# prepare 脚本会在该子 workspace 内构建 12 个官方插件 runtime（用它自己的 pnpm/tsc/esbuild），
-# 所以这份安装保留（去掉也能跑，但插件 runtime 构建会转而依赖根 node_modules 的 hoisted 结果）。
-RUN --mount=type=cache,id=zcode-pnpm-store,target=/pnpm/store \
-    pnpm --dir /app/apps/zcode-cli install --no-frozen-lockfile
+# 注意：不要在这里对子 workspace 再跑 `pnpm --dir apps/zcode-cli install`。
+# apps/zcode-cli 的 pnpm-workspace.yaml 只声明 packages/* 与 tools/*，而它的 packages/adapters
+# 依赖根 workspace 的包（如 @zcode/model-option-map = workspace:*）。单独在子目录 install 会报
+# ERR_PNPM_WORKSPACE_PKG_NOT_FOUND（已实测）。根 install 已经把 apps/zcode-cli 及其 packages
+# 作为 importer 全部装好，agent bundle 构建脚本也走根 node_modules，因此只需根 install。
 
-# Agent bundle（本步内部就会构建 CLI bundle + 全部官方插件 runtime，无需再单独 build CLI），
-# 产物在 packages/desktop/bundled-agents/<platform>-<arch>/glm/：
-#   zcode.cjs / packages/*-plugin/ / packages/bundled-skills/ / npm/
-# 注意：该步需联网下载内置 npm tarball（registry.npmjs.org）。
 RUN node /app/packages/desktop/scripts/prepare-agent-node-bundle.mjs
 
 # 服务端（HTTP/WS + 静态托管）与前端静态资源

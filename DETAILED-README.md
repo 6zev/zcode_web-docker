@@ -48,8 +48,10 @@ docker run -d --name zcode-web -p 3030:3030 \
 
 ```text
 git clone --depth 1 zai-org/ZCode              # ARG ZCODE_REPO / ZCODE_REF
-pnpm install                                   # 根 workspace(hoisted node_modules)
-pnpm --dir apps/zcode-cli install              # 子 workspace(独立 lockfile)
+pnpm install                                   # 根 workspace(hoisted node_modules;含 apps/zcode-cli 的 importer)
+# 注意：不要在子 workspace 再装一次(apps/zcode-cli/pnpm-workspace.yaml 不含根包，
+# 会报 ERR_PNPM_WORKSPACE_PKG_NOT_FOUND：@zcode/model-option-map 不在子 workspace 里)
+
 node packages/desktop/scripts/prepare-agent-node-bundle.mjs   # → bundled-agents/linux-x64/glm/
 pnpm --filter @zcode/server build              # → packages/server/dist/entry-http.js
 pnpm --filter @zcode/web build                 # → packages/web/dist/
