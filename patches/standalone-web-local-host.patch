@@ -1,0 +1,44 @@
+--- a/packages/services/src/project/index.ts
++++ b/packages/services/src/project/index.ts
+@@ -134,9 +134,13 @@
+   data?: { port: ProjectDataPort; repository(): Promise<ProjectDataRepositoryContract> };
+ }): IProjectService {
+   const route = async (hostId?: string) => {
+-    if (!hostId || hostId === (options.ownerHostId ?? "local")) return null;
++    // 单用户本地 Docker/Web 部署:浏览器把服务器当“本机”,hostId="local" 归一到
++    // 服务器自身的 ownerHostId(仓库层 saveProject 本就把存储行强制写到 ownerHostId,
++    // 见 project-repository.ts),因此这里按本机处理是安全的;桌面远控语义不变。
++    const effectiveHostId = hostId === "local" && options.ownerHostId ? options.ownerHostId : hostId;
++    if (!effectiveHostId || effectiveHostId === (options.ownerHostId ?? "local")) return null;
+     if (!options.resolveHost) throw new Error("project.host-offline");
+-    return options.resolveHost(hostId);
++    return options.resolveHost(effectiveHostId);
+   };
+   const creationFlights = new Map<string, Promise<ProjectDirectories>>();
+   const changed = async () => {
+@@ -282,7 +286,10 @@
+       const id = params?.projectId;
+       const remoteOwner = Boolean(options.ownerHostId && options.ownerHostId !== "local");
+       // 旧入口可绕过项目直接在远端 mkdir；必须在目录或会话副作用之前拒绝。
+-      if (remoteOwner && !id) throw new Error("project.remote-project-required");
++      // 例外:浏览器客户端显式 hostId="local"(单用户本地部署把服务器当本机),
++      // 允许在服务器上准备草稿目录;无 hostId 的远端入口仍然拒绝。
++      if (remoteOwner && !id && params?.hostId !== "local")
++        throw new Error("project.remote-project-required");
+       if (id && creationFlights.has(id)) return creationFlights.get(id)!;
+       const flight = (async (): Promise<ProjectDirectories> => {
+         if (!id) {
+--- a/packages/services/src/node.ts
++++ b/packages/services/src/node.ts
+@@ -2195,7 +2195,10 @@
+     ownerHostId: options?.projectStorageHostId,
+     resolveHost: options?.resolveProjectHostService,
+     repository: () => taskIndexRepo.getProjectRepository(),
+-    workspaceDirectory: join(projectDataRoot(), "workspace"),
++    // 浏览器(单用户本地 Docker)草稿目录优先落在对外 advertised workspace;
++    // 桌面/远控模式无该 env,保持原 {dataRoot}/workspace 不变。
++    workspaceDirectory:
++      process.env.ZCODE_SERVER_WORKSPACE?.trim() || join(projectDataRoot(), "workspace"),
+     afterChange: publishProjectChange,
+     // zcodeAgentService 在下方创建；端口只在命令执行时取用它。
+     data: {

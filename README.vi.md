@@ -98,3 +98,8 @@ docker compose down          # volume vẫn còn
 - `docker compose config` / build chưa chạy thử được trong môi trường soạn file (không có Docker daemon). Đã kiểm tra cú pháp shell, YAML và các đường dẫn mount.
 - Build cần mạng tới GitHub + npm registry; có thể đổi `NPM_REGISTRY` hoặc truyền `HTTP_PROXY`/`HTTPS_PROXY`.
 - Agent có toàn quyền trong container và thư mục workspace — không mount thư mục chứa bí mật của host vào đó.
+
+## Patch chế độ thuần trình duyệt
+
+Upstream cố tình không cho server standalone làm "local host" — sidebar duyệt file/tạo project trên web sẽ báo `project.host-offline` / `project.remote-project-required`. Image này build kèm [patches/standalone-web-local-host.patch](patches/standalone-web-local-host.patch): `hostId="local"` từ browser được quy về chính server → duyệt目录/tạo project/chạy phiên hoạt động bình thường; chế độ remote-control của desktop không đổi. Đã verify bằng unit test 5/5 trên `createProjectService` upstream.
+

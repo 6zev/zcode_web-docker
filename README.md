@@ -74,3 +74,16 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 - 只用 Docker 跑镜像:**不需要**本地 Node/pnpm。要自己构建镜像:构建机需能出网,首次构建约 10–25 分钟
   (含 Python/uv/Chrome/Playwright 后体积与时间会再增加一些)。
 - 卷 `/root/zcode/data` 必须持久化(HOME:凭据、会话库、插件缓存);`/root/zcode/workspace` 是 ZCode 的默认工作目录。
+
+## 纯浏览器模式补丁
+
+上游 standalone server 有意不做 "local host"(浏览器里 sidebar 的文件树/新建 project 会报
+`project.host-offline` / `project.remote-project-required`,完整流程期望桌面客户端连入当 host)。
+本镜像在构建时应用 [patches/standalone-web-local-host.patch](patches/standalone-web-local-host.patch):
+
+- project service 把浏览器发来的 `hostId="local"` 归一到服务器自身身份 → 纯浏览器可浏览目录、创建 project、发起会话;
+- `prepareSession` 对显式 `hostId="local"` 的请求放行(草稿目录落在 `ZCODE_SERVER_WORKSPACE`);
+- 桌面远控语义不变:未带 hostId 的远端入口仍被拒绝,未知 host 仍报 `host-offline`。
+
+已用 upstream 的 `createProjectService` 写单测验证(patch 前复现两个错误,patch 后 5/5 通过)。
+

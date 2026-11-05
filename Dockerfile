@@ -59,9 +59,13 @@ WORKDIR /app
 
 # 源码。默认从官方仓库浅克隆。
 # 要构建本地检出：把下面这段 RUN 换成 `COPY . /app/`（.dockerignore 已排除 .git 与 node_modules）。
+COPY patches /tmp/zcode-patches
 RUN git clone --depth 1 --branch "${ZCODE_REF}" "${ZCODE_REPO}" /app \
  && rm -rf /app/.git \
- && git config --global --add safe.directory /app
+ && git config --global --add safe.directory /app \
+ # 单用户本地 Docker 补丁:浏览器 hostId="local" 归一到服务器自身,
+ # 让纯浏览器模式可以浏览目录/创建 project(详见 patches/*.patch)。
+ && for p in /tmp/zcode-patches/*.patch; do git -C /app apply -v "$p"; done
 
 
 # 根 workspace 安装(含 apps/zcode-cli 及其 packages 作为 importer)。
