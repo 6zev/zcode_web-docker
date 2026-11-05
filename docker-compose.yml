@@ -17,8 +17,10 @@ services:
     container_name: zcode-web
     restart: unless-stopped
     init: true
-    ports:
-      - "${BIND_HOST:-0.0.0.0}:${BIND_PORT:-3030}:3030"
+    # 不对外发布端口:zcode 只在内部网络里给网关访问。
+    # 想临时直连排查(绕过网关)就把下面这行取消注释,仅绑本机回环。
+    # ports:
+    #   - "127.0.0.1:3030:3030"
     environment:
       PORT: "3030"
       HOST: "0.0.0.0"
@@ -47,5 +49,49 @@ services:
       - no-new-privileges:true
     stop_grace_period: 30s
 
+  # ---------------------------------------------------------------------------
+  # 网关:反向代理 + Basic Auth,唯一对外入口(默认 8080)
+  #   - zcode 的 3030 不发布,只有网关能访问
+  #   - 所有请求(含 WebSocket /ws)先过 Basic Auth 再转发
+  #   - 默认账号 zcode / 口令 zcode,上线前必须用 GATEWAY_AUTH_PASSWORD 改掉
+  # ---------------------------------------------------------------------------
+  gateway:
+    image: ${GATEWAY_IMAGE:-caddy:2}
+    container_name: zcode-gateway
+    restart: unless-stopped
+    depends_on:
+      - zcode-web
+    ports:
+      - "${GATEWAY_BIND_HOST:-0.0.0.0}:${GATEWAY_PORT:-8080}:80"
+    environment:
+      # 用户名 / 口令哈希(哈希为空时由 gateway/docker-entrypoint.sh 用口令现算)
+      ZCODE_AUTH_USER: ${GATEWAY_AUTH_USER:-zcode}
+      ZCODE_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-zcode}
+      ZCODE_AUTH_HASH: ${GATEWAY_AUTH_HASH:-}
+      ZCODE_UPSTREAM: zcode-web:3030
+      ZCODE_LISTEN: ":80"
+      # 需要 TLS 时打开,例如:
+      #   ZCODE_TLS=tls internal            自签(局域网)
+      #   ZCODE_TLS="tls you@example.com"   公网域名自动签 Let's Encrypt
+      # 并把端口映射改成 443
+      ZCODE_TLS: ${GATEWAY_TLS:-}
+      TZ: ${TZ:-Asia/Saigon}
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./gateway/docker-entrypoint.sh:/usr/local/bin/gateway-entrypoint.sh:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    entrypoint: ["/bin/sh", "/usr/local/bin/gateway-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   zcode-data:
+  caddy-data:
+  caddy-config:

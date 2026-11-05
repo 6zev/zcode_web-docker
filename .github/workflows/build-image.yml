@@ -72,6 +72,36 @@ jobs:
           grep -q 'ZCODE_WEB_STATIC_ROOT=/app/packages/web/dist' Dockerfile
           mkdir -p workspace
 
+      - name: compose 校验(网关必须在、zcode 不得对外发布端口)
+        run: |
+          set -eux
+          docker compose config > /tmp/compose.resolved.yml
+          python3 - <<'PY'
+          import yaml
+          d = yaml.safe_load(open('/tmp/compose.resolved.yml'))
+          svc = d['services']
+          assert 'gateway' in svc, 'compose 里缺少 gateway 服务'
+          assert 'zcode-web' in svc, 'compose 里缺少 zcode-web 服务'
+          gw_ports = svc['gateway'].get('ports') or []
+          assert gw_ports, '网关没有发布端口'
+          zc_ports = svc['zcode-web'].get('ports') or []
+          assert not zc_ports, f'zcode-web 不应该对外发布端口,但发现: {zc_ports}'
+          gw_env = svc['gateway'].get('environment') or {}
+          assert 'ZCODE_AUTH_PASSWORD' in gw_env or 'ZCODE_AUTH_HASH' in gw_env, '网关缺少口令配置'
+          print('compose ok: gateway 暴露', gw_ports, '/ zcode-web 未发布端口')
+          PY
+
+      - name: 校验 Caddyfile(官方 caddy 镜像)
+        run: |
+          set -eux
+          docker run --rm -v "$PWD/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e ZCODE_AUTH_USER=zcode \
+            -e ZCODE_AUTH_HASH="$(docker run --rm caddy:2 caddy hash-password --plaintext zcode | base64 -w0)" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: 校验网关入口脚本
+        run: sh -n gateway/docker-entrypoint.sh && which sh
+
   # 真构建：单平台时顺便 load 到本地跑冒烟测试；push 事件推送到 GHCR
   build:
     needs: lint
