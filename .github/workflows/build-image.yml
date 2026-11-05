@@ -64,37 +64,52 @@ jobs:
           set -eux
           bash -n docker-entrypoint.sh
           bash -n zcode-preflight.sh
-          python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('compose yaml ok')"
+          ZCODE_SERVER_AUTH_TOKEN=dummy python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml')); print('compose yaml ok')"
           python3 -c "import json; json.load(open('zcode-web.docker.json')); print('manifest json ok')"
+          python3 -c "import yaml; d=yaml.safe_load(open('docker-compose.yml')); assert 'ZCODE_SERVER_AUTH_TOKEN' in str(d), 'compose 里找不到令牌配置'; print('compose 令牌项存在')"
           grep -q 'AS builder' Dockerfile
           grep -q 'AS runtime' Dockerfile
           grep -q 'ZCODE_AGENT_SERVER_COMMAND=/app/agent/zcode.cjs' Dockerfile
           grep -q 'ZCODE_WEB_STATIC_ROOT=/app/packages/web/dist' Dockerfile
           mkdir -p workspace
 
-      - name: compose 校验(网关必须在、zcode 不得对外发布端口)
+      - name: compose 校验(令牌必填 + 端口归属 + 网关走 profile)
         run: |
           set -eux
+          # 带令牌解析默认方案
           ZCODE_SERVER_AUTH_TOKEN=dummy-token-for-lint docker compose config > /tmp/compose.resolved.yml
+          ZCODE_SERVER_AUTH_TOKEN=dummy-token-for-lint docker compose --profile nginx --profile caddy config > /tmp/compose.all.yml
           python3 - <<'PY'
           import yaml
           d = yaml.safe_load(open('/tmp/compose.resolved.yml'))
           svc = d['services']
-          assert 'gateway' in svc, 'compose 里缺少 gateway 服务'
-          assert 'zcode-web' in svc, 'compose 里缺少 zcode-web 服务'
-          gw_ports = svc['gateway'].get('ports') or []
-          assert gw_ports, '网关没有发布端口'
-          zc_ports = svc['zcode-web'].get('ports') or []
+          zc = svc['zcode-web']
+          zc_ports = zc.get('ports') or []
           assert zc_ports, '默认方案下 zcode-web 必须发布端口(靠自带令牌保护)'
-          zc_env = svc['zcode-web'].get('environment') or {}
-          token = zc_env.get('ZCODE_SERVER_AUTH_TOKEN')
-          assert token, 'zcode-web 必须配置 ZCODE_SERVER_AUTH_TOKEN'
-          assert '?token=' in str(zc_env.get('ZCODE_SERVER_AUTH_TOKEN')), '令牌必须是必填(${VAR:?msg}),而不是静默留空'
-          gw_env = svc['gateway'].get('environment') or {}
-          assert 'ZCODE_AUTH_PASSWORD' in gw_env or 'ZCODE_AUTH_HASH' in gw_env, '网关缺少口令配置'
-          print('compose ok: zcode-web 发布', zc_ports, '令牌必填=', '?token=' in str(token))
-          print('compose ok: 网关 profiles =', svc['gateway'].get('profiles'), '/', svc['gateway-caddy'].get('profiles'))
+          tok = (zc.get('environment') or {}).get('ZCODE_SERVER_AUTH_TOKEN')
+          assert tok, 'zcode-web 必须配置 ZCODE_SERVER_AUTH_TOKEN'
+          assert tok == 'dummy-token-for-lint', f'令牌没被替换: {tok!r}'
+          raw = open('docker-compose.yml', encoding='utf-8').read()
+          assert ':?missing' in raw, '令牌必须是必填形式 ${VAR:?msg}'
+          print('compose ok: zcode-web 发布', zc_ports, '/ 令牌必填且已注入')
+
+          a = yaml.safe_load(open('/tmp/compose.all.yml'))['services']
+          assert 'gateway' in a and 'gateway-caddy' in a, '带 profile 时必须能解析出两个网关'
+          gw = a['gateway'].get('ports') or []
+          assert gw, '网关没有发布端口'
+          assert a['gateway'].get('profiles') == ['nginx'], 'nginx 网关必须走 profile'
+          assert a['gateway-caddy'].get('profiles') == ['caddy'], 'caddy 网关必须走 profile'
+          print('compose ok: 网关(profile nginx)暴露', gw, '/ caddy profile =', a['gateway-caddy'].get('profiles'))
           PY
+
+      - name: compose 负向校验(不设令牌必须直接失败)
+        run: |
+          set -eux
+          if ZCODE_SERVER_AUTH_TOKEN= docker compose config >/dev/null 2>/tmp/compose.err; then
+            echo "不设令牌竟然通过了,说明保护没做成必填" >&2
+            exit 1
+          fi
+          echo "不设令牌如预期失败:"; head -3 /tmp/compose.err
 
       - name: 校验网关(用官方 nginx 镜像跑入口脚本 + nginx -t)
         run: |
