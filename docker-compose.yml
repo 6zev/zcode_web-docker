@@ -11,8 +11,6 @@ services:
         ZCODE_REPO: ${ZCODE_REPO:-https://github.com/zai-org/ZCode.git}
         ZCODE_REF: ${ZCODE_REF:-main}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org/}
-        APP_UID: ${APP_UID:-1000}
-        APP_GID: ${APP_GID:-1000}
         UV_VERSION: ${UV_VERSION:-0.13.7}
         PLAYWRIGHT_VERSION: ${PLAYWRIGHT_VERSION:-1.59.1}
     image: ${IMAGE_NAME:-zcode-web}:${IMAGE_TAG:-3.17.2}
@@ -22,8 +20,7 @@ services:
     # 对外入口:用 zcode 自带的令牌保护(ZCODE_SERVER_AUTH_TOKEN),不需要任何代理容器。
     # /api/* 与 /ws 都要求令牌;首次访问 http://<host>:3030/?token=<令牌> 换成 Cookie 即可。
     # 不设令牌也能启动(方便本机/内网试跑),但启动日志会打印醒目警告,端口就成了裸奔。
-    # 需要 TLS/限速/只开一个端口时,再叠加 --profile nginx 或 --profile caddy。
-    # 对外端口(裸奔风险见上;需要收敛入口就用 --profile nginx)
+    # 注意:本镜像始终以 root 运行,不提供非 root 切换。
     ports:
       - "${BIND_HOST:-0.0.0.0}:${BIND_PORT:-3030}:3030"
     environment:
@@ -38,16 +35,13 @@ services:
       # 访问令牌。留空 = 不开启令牌保护(此时任何能访问本端口的人都能用,启动日志会大声警告)。
       # 生成: openssl rand -hex 24
       ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:-}
-      # Chrome chạy bằng root trong container cần --no-sandbox; wrapper trong
-      # image tự thêm cờ này. Đặt 0 để tắt (chỉ dùng khi chạy non-root + sandbox).
+      # Chrome 运行在 root 下需要 --no-sandbox;镜像里的 wrapper 已默认加上。
       ZCODE_CHROME_NO_SANDBOX: ${ZCODE_CHROME_NO_SANDBOX:-1}
       # 可选代理
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,.local}
-    # 运行身份:root(镜像默认)。入口脚本会把 /root/zcode 下的数据与工作区属主修正为当前 UID,
-    # 所以 bind mount 到宿主机上新建的空目录也不会 EACCES。
-    # 想改回非 root:注释掉下面这行,并 sudo chown -R 1000:1000 <挂载目录>,再用 user: "1000:1000"
+    # 运行身份:始终 root。镜像与 compose 都固定 user 0:0,入口脚本保证目录可写。
     user: "0:0"
     volumes:
       # 凭据 / 会话库 / 插件缓存 / 日志：必须持久化，否则重建容器要重新登录
@@ -62,79 +56,5 @@ services:
     shm_size: "1gb"
     stop_grace_period: 30s
 
-  # ---------------------------------------------------------------------------
-  # 可选网关(默认不启用,因为 zcode 自带令牌已经够用):
-  #   docker compose --profile nginx up -d
-  # 场景:需要 TLS 终止 / 统一限速 / IP 白名单,或想让端口只开一个 8080。
-  # 注意开着网关时建议把 zcode-web 的 ports 注释掉,避免绕过网关直连 3030。
-  # ---------------------------------------------------------------------------
-  gateway:
-    profiles: ["nginx"]
-    build:
-      context: ./gateway
-      dockerfile: Dockerfile
-    image: ${GATEWAY_IMAGE:-zcode-gateway:latest}
-    container_name: zcode-gateway
-    restart: unless-stopped
-    depends_on:
-      - zcode-web
-    ports:
-      - "${GATEWAY_BIND_HOST:-0.0.0.0}:${GATEWAY_PORT:-8080}:80"
-    environment:
-      ZCODE_AUTH_USER: ${GATEWAY_AUTH_USER:-zcode}
-      ZCODE_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-zcode}
-      ZCODE_AUTH_HASH: ${GATEWAY_AUTH_HASH:-}
-      ZCODE_AUTH_REALM: ${GATEWAY_AUTH_REALM:-ZCode}
-      ZCODE_UPSTREAM: zcode-web:3030
-      ZCODE_LISTEN_PORT: "80"
-      # 限速(挡暴力破解);浏览器首屏会并发几十个请求,burst 给小了会 503
-      ZCODE_RATE: ${GATEWAY_RATE:-20r/s}
-      ZCODE_BURST: ${GATEWAY_BURST:-200}
-      TZ: ${TZ:-Asia/Saigon}
-    volumes:
-      - ./gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
-      - ./gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro
-    healthcheck:
-      # 未认证返回 401 也算"网关活着"(说明 nginx 在监听、认证在工作)
-      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:80/); [ \"$$code\" = \"200\" ] || [ \"$$code\" = \"401\" ]"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 5
-    security_opt:
-      - no-new-privileges:true
-
-  # ---------------------------------------------------------------------------
-  # 可选网关 C:caddy —— 自动 HTTPS / 更少配置(docker compose --profile caddy up -d)
-  # ---------------------------------------------------------------------------
-  gateway-caddy:
-    profiles: ["caddy"]
-    image: ${GATEWAY_CADDY_IMAGE:-caddy:2-alpine}
-    container_name: zcode-gateway-caddy
-    restart: unless-stopped
-    depends_on:
-      - zcode-web
-    ports:
-      - "${GATEWAY_CADDY_PORT:-8081}:80"
-    environment:
-      ZCODE_AUTH_USER: ${GATEWAY_AUTH_USER:-zcode}
-      ZCODE_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-zcode}
-      ZCODE_AUTH_HASH: ${GATEWAY_AUTH_HASH:-}
-      ZCODE_UPSTREAM: zcode-web:3030
-      ZCODE_LISTEN: ":80"
-      ZCODE_TLS: ${GATEWAY_TLS:-}
-      TZ: ${TZ:-Asia/Saigon}
-    volumes:
-      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./gateway/docker-entrypoint.sh:/usr/local/bin/gateway-entrypoint.sh:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    entrypoint: ["/bin/sh", "/usr/local/bin/gateway-entrypoint.sh"]
-    security_opt:
-      - no-new-privileges:true
-
-
 volumes:
   zcode-data:
-  caddy-data:
-  caddy-config:

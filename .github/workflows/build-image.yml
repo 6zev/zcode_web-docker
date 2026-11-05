@@ -80,34 +80,49 @@ jobs:
           grep -q 'ZCODE_WEB_STATIC_ROOT=/app/packages/web/dist' Dockerfile
           mkdir -p workspace
 
-      - name: compose 校验(令牌可选 + 端口归属 + 网关走 profile)
+      - name: compose 校验(令牌可选 + 端口归属 + 只有 zcode-web)
         run: |
           set -eux
           # 不设令牌也能解析(用户要求:允许裸跑,只给警告)
           docker compose config > /tmp/compose.notoken.yml
-          ZCODE_SERVER_AUTH_TOKEN=dummy-token-for-lint docker compose --profile nginx --profile caddy config > /tmp/compose.all.yml
+          ZCODE_SERVER_AUTH_TOKEN=dummy-token-for-lint docker compose config > /tmp/compose.token.yml
           python3 - <<'PY'
           import yaml
+          raw = open('docker-compose.yml', encoding='utf-8').read()
+          assert 'gateway' not in raw.lower(), 'compose 里不应有网关'
+          assert 'nginx' not in raw.lower() and 'caddy' not in raw.lower(), 'compose 里不应有 nginx/caddy'
+
           d = yaml.safe_load(open('/tmp/compose.notoken.yml'))
           svc = d['services']
+          assert set(svc) == {'zcode-web'}, f'只应有 zcode-web,实际: {set(svc)}'
           zc = svc['zcode-web']
           zc_ports = zc.get('ports') or []
           assert zc_ports, '默认方案下 zcode-web 必须发布端口(靠自带令牌保护)'
           tok = (zc.get('environment') or {}).get('ZCODE_SERVER_AUTH_TOKEN')
           assert tok in (None, ''), f'不设令牌时这里应该为空,实际: {tok!r}'
-          raw = open('docker-compose.yml', encoding='utf-8').read()
           assert ':?' not in raw, '令牌不该做成必填'
-          print('compose ok: zcode-web 发布', zc_ports, '/ 不设令牌可解析(令牌项为空)')
+          # 始终 root 运行
+          assert str(zc.get('user')) == '0:0', f'compose 必须 user 0:0,实际: {zc.get("user")!r}'
+          print('compose ok: 只有 zcode-web,发布', zc_ports, '/ 不设令牌可解析(令牌项为空)')
 
-          a = yaml.safe_load(open('/tmp/compose.all.yml'))['services']
-          assert 'gateway' in a and 'gateway-caddy' in a, '带 profile 时必须能解析出两个网关'
-          gw = a['gateway'].get('ports') or []
-          assert gw, '网关没有发布端口'
-          assert a['gateway'].get('profiles') == ['nginx'], 'nginx 网关必须走 profile'
-          assert a['gateway-caddy'].get('profiles') == ['caddy'], 'caddy 网关必须走 profile'
+          a = yaml.safe_load(open('/tmp/compose.token.yml'))['services']
           assert (a['zcode-web'].get('environment') or {}).get('ZCODE_SERVER_AUTH_TOKEN') == 'dummy-token-for-lint'
-          print('compose ok: 网关(profile nginx)暴露', gw, '/ caddy profile =', a['gateway-caddy'].get('profiles'))
+          print('compose ok: 设了令牌能透传')
           PY
+
+      - name: 镜像始终以 root 运行
+        run: |
+          set -eux
+          grep -q '^USER root' Dockerfile
+          grep -q '始终以 root 运行' Dockerfile
+          ! grep -q 'ZCODE_DROP_PRIVILEGES' Dockerfile
+          ! grep -q 'APP_UID' Dockerfile
+          ! grep -q 'setpriv' docker-entrypoint.sh
+          ! grep -q 'FIX_OWNERSHIP' docker-entrypoint.sh
+          ! grep -q '1000:1000' docker-entrypoint.sh Dockerfile docker-compose.yml
+          ! grep -qi 'gateway\|nginx\|caddy' docker-compose.yml .env.example docker-entrypoint.sh
+          grep -q '不使用任何反代/网关容器' .env.example
+          echo "运行身份 ok:始终 root,无非 root 回退,无网关"
 
       - name: 不设令牌可裸跑,但入口脚本必须打印警告
         run: |
@@ -125,21 +140,6 @@ jobs:
           grep -q "已启用令牌" "$d/with-token.log"
           echo "入口脚本行为正确:无令牌=警告且继续启动;有令牌=提示已启用"
           sed -n '1,3p' "$d/no-token.log"
-
-      - name: 校验网关(用官方 nginx 镜像跑入口脚本 + nginx -t)
-        run: |
-          set -eux
-          docker run --rm \
-            -e ZCODE_UPSTREAM=zcode-web:3030 -e ZCODE_AUTH_PASSWORD=smoke \
-            -v "$PWD/gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro" \
-            -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
-            "$(docker build -q ./gateway)" sh -c 'sh /docker-entrypoint.d/10-zcode-auth.sh'
-
-      - name: 校验网关入口脚本(nginx + caddy)
-        run: |
-          set -eux
-          sh -n gateway/nginx-entrypoint.sh
-          sh -n gateway/docker-entrypoint.sh
 
   # 解析上游 ZCode 版本，并决定本次是否需要构建。
   # 定时/手动推送：GHCR 已有 <version> tag 就跳过（force=true 可强制）；push/PR 默认构建。
@@ -278,8 +278,6 @@ jobs:
             ZCODE_REF=${{ vars.ZCODE_REF || 'main' }}
             UV_VERSION=${{ env.UV_VERSION }}
             PLAYWRIGHT_VERSION=${{ env.PLAYWRIGHT_VERSION }}
-            APP_UID=1000
-            APP_GID=1000
           cache-from: type=gha,scope=${{ env.IMAGE_NAME }}
           cache-to: type=gha,mode=max,scope=${{ env.IMAGE_NAME }}
           provenance: false
@@ -291,9 +289,7 @@ jobs:
           set -eux
           IMG="$(echo '${{ steps.meta.outputs.tags }}' | head -n1)"
           echo "IMG=${IMG}" >> "$GITHUB_ENV"
-          # 用匿名卷而不是宿主机 bind mount:Docker 会把镜像里 /root/zcode/* 的属主
-          # (1000:1000)复制给卷,非 root 容器可直接写。bind mount 到新建的 root 目录
-          # 需要先 chown,已在 README 里给出三种修法。
+          # 用匿名卷起容器(始终 root);bind mount 的属主问题已由 root 运行消除
           docker run -d --name zcode-smoke --shm-size=1g -p 3030:3030 "${IMG}"
 
       - name: 等待健康
@@ -313,44 +309,6 @@ jobs:
       - name: 容器内自检脚本
         if: steps.cfg.outputs.smoke == 'true'
         run: docker exec zcode-smoke /usr/local/bin/zcode-preflight.sh
-
-      - name: 网关冒烟(无需 zcode:用 whoami 当上游,验证 Basic Auth + 反代 + 401 + WebSocket)
-        if: steps.cfg.outputs.smoke == 'true'
-        run: |
-          set -eux
-          docker network create zc-gw-net >/dev/null 2>&1 || true
-          docker run -d --rm --name zc-upstream --network zc-gw-net traefik/whoami:v1.10.2 >/dev/null
-          docker run -d --rm --name zc-gateway --network zc-gw-net -p 18080:80 \
-            -e ZCODE_AUTH_USER=zcode -e ZCODE_AUTH_PASSWORD=s3cret -e ZCODE_UPSTREAM=zc-upstream:80 \
-            -e ZCODE_RATE=50r/s -e ZCODE_BURST=200 \
-            -v "$PWD/gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro" \
-            -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
-            "$(docker build -q ./gateway)"
-          for i in $(seq 1 30); do
-            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18080/ || true)"
-            [ "${code}" = "401" ] && break
-            sleep 2
-          done
-          echo "无凭据(期望 401): ${code}"
-          [ "${code}" = "401" ]
-          ok="$(curl -s -o /dev/null -w '%{http_code}' -u zcode:s3cret http://127.0.0.1:18080/)"
-          echo "正确口令(期望 200): ${ok}"
-          [ "${ok}" = "200" ]
-          bad="$(curl -s -o /dev/null -w '%{http_code}' -u zcode:wrong http://127.0.0.1:18080/)"
-          echo "错误口令(期望 401): ${bad}"
-          [ "${bad}" = "401" ]
-          who="$(curl -s -u zcode:s3cret http://127.0.0.1:18080/ | grep -c 'Hostname' || true)"
-          echo "反代到上游(whoami Hostname 行数): ${who}"
-          [ "${who}" -ge 1 ]
-          # WebSocket 升级:带凭据时上游必须看到 Upgrade(whoami 会回显头)
-          up="$(curl -s -u zcode:s3cret -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-            http://127.0.0.1:18080/ | grep -ci 'Upgrade: websocket' || true)"
-          echo "WebSocket 升级头透传到上游(命中数): ${up}"
-          [ "${up}" -ge 1 ]
-          docker logs zc-gateway 2>&1 | tail -30 || true
-          docker rm -f zc-gateway zc-upstream >/dev/null 2>&1 || true
-          docker network rm zc-gw-net >/dev/null 2>&1 || true
 
       - name: 失败时导出日志
         if: failure()

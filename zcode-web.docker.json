@@ -88,6 +88,6 @@
     "agent": "zcode.cjs plugins list 列出 16 个官方插件并从随包资源 seed；app-server --stdio 起停正常",
     "preflight": "对真实实例运行 zcode-preflight.sh：20 项通过 / 0 失败",
     "toolchain": "Python/uv/Chrome/Playwright 已写入 Dockerfile，但本沙箱无 docker，尚未构建验证",
-    "notVerified": "docker build 本身、容器内非 root 与 HEALTHCHECK（本沙箱无 docker）"
+    "notVerified": "docker build 本身与 HEALTHCHECK（本沙箱无 docker）；容器内始终 root"
   }
 }

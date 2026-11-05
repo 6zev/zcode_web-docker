@@ -83,7 +83,6 @@ docker run -d --name zcode-web -p 3030:3030 \
 ## Bảo vệ truy cập
 
 - Cách gọn nhất: `ZCODE_SERVER_AUTH_TOKEN` (bảo vệ `/api/*` và `/ws`).
-- Cần TLS / giới hạn tốc độ / chỉ mở một cổng: `docker compose --profile nginx up -d` (cổng `8080`, Basic Auth) hoặc `--profile caddy` (cổng `8081`).
 - Không đặt token thì chỉ nên bind `BIND_HOST=127.0.0.1`.
 
 ## Kiểm tra

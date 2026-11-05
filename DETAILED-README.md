@@ -1,4 +1,3 @@
-# ZCode Web — Docker
 
 在**一个容器**里跑官方 ZCode Web(上游仓库 [`zai-org/ZCode`](https://github.com/zai-org/ZCode) v3.17.2):
 Web UI + `@zcode/server`(HTTP/WS)+ Agent CLI `zcode.cjs`(stdio 拉起)。单进程、单端口。
@@ -34,7 +33,6 @@ docker run -d --name zcode-web -p 3030:3030 \
 
 | 文件 | 作用 |
 |---|---|
-| [Dockerfile](Dockerfile) | 两阶段:`builder`(克隆 + 构建)→ `runtime`(仅运行、非 root、含 HEALTHCHECK) |
 | [docker-compose.yml](docker-compose.yml) | 一条命令起服务,端口映射,`/root/zcode/data` + `/root/zcode/workspace` 卷 |
 | [docker-entrypoint.sh](docker-entrypoint.sh) | 准备数据目录、首次铺默认设置、打印启动诊断 |
 | [zcode-preflight.sh](zcode-preflight.sh) | 镜像自检(产物/权限/网络/健康),进容器执行 |
@@ -43,7 +41,6 @@ docker run -d --name zcode-web -p 3030:3030 \
 | [VERIFY-NOTES.md](VERIFY-NOTES.md) | 逐条源码核对记录(每条带 `file:line`),Dockerfile 的依据 |
 | [screenshots/](screenshots) | 真实渲染验证的截图 |
 | [.github/workflows/build-image.yml](.github/workflows/build-image.yml) | CI:构建并推送 GHCR + 冒烟测试(含网关) |
-| [gateway/nginx.conf](gateway/nginx.conf) | 默认网关:nginx Basic Auth + 反代 + WebSocket + 限速 |
 
 ## 3. 构建到底做了什么(照源码对齐上游)
 
@@ -90,7 +87,6 @@ pnpm --filter @zcode/web build                 # → packages/web/dist/
 
 > 运行身份:镜像默认 **root**(挂载卷、改属主、临时装包都最省事);入口脚本启动时会把 `/root/zcode/data` 与
 > `/root/zcode/workspace` 的属主修正为当前 UID,所以 bind mount 到宿主机上新建的空目录也能直接跑。
-> 想改回非 root:`--user 1000:1000`(compose 里写 `user: "1000:1000"`),并 `sudo chown -R 1000:1000 <挂载目录>`,
 > 或先以 root 起一次让入口脚本把属主改好。
 
 ## 5. 构建后怎么验
@@ -110,12 +106,9 @@ Agent 入口与随包 `packages/bundled-skills`/`npm`、`/root/zcode/data` 与 `
 | 现象 | 原因 / 处理 |
 |---|---|
 | 页面全 404,但端口是通的 | `ZCODE_WEB_STATIC_ROOT` 指向的目录里没有 `index.html`(web 构建失败或被裁剪)。最典型的静默失败 |
-| 容器启动即退出,日志 `[zcode-server:http] startup failed` | 数据根不可写。以 root 运行(镜像默认)会自动修正属主;非 root 时 `sudo chown -R 1000:1000 <宿主机上的数据目录>` |
 | UI 能开,发消息报 `agent server command is not configured` | `/app/agent/zcode.cjs` 缺失(build 阶段 agent bundle 未成功) |
 | 官方插件、`/workflow` 技能缺失 | 只拷了单个 `zcode.cjs`。必须整目录拷 `bundled-agents/linux-x64/glm`(镜像里就是 `/app/agent`) |
 | 登录/对话超时 | 容器出网不通:`zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`;在 `.env` 里配 `HTTPS_PROXY` |
-| 以非 root 跑时 `EACCES: permission denied, mkdir '/root/zcode/data/.zcode'` | 镜像默认是 **root** 运行;若你显式改成 `--user 1000:1000`,挂载目录需要 `sudo chown -R 1000:1000 <目录>`,或先以 root 起一次让入口脚本修正属主,或改用命名卷 `-v zcode-data:/root/zcode/data` |
-| Agent 写不了 workspace(`EACCES`) | bind mount 属主不匹配,`sudo chown -R 1000:1000 <WORKSPACE_DIR>`,或 `--user root` 让入口脚本自愈 |
 | 设了 `ZCODE_SERVER_AUTH_TOKEN` 后 UI 连不上 ws | 首访必须带 `?token=` 换 Cookie;或直接不设令牌(默认) |
 | 终端(terminal)不可用 | `node-pty` 无官方 linux 预编译,构建期靠 g++ 现场编译;失败只影响终端,不阻断启动 |
 | 构建慢 / 拉不下来 | 换 `.env` 里的 `NPM_REGISTRY`,或在别的机器 build 后 `docker save` / `docker load` |
@@ -136,7 +129,6 @@ Agent 入口与随包 `packages/bundled-skills`/`npm`、`/root/zcode/data` 与 `
 | Agent bundle | ✅ `zcode.cjs plugins list` 列出 16 个官方插件并成功从随包资源 seed 到 `$HOME/.zcode/cli/plugins/cache`;`app-server --stdio` 正常起停 |
 | 镜像自检脚本 | ✅ 对着真实实例跑出 20 项全通过 |
 
-仍未实测的部分(本沙箱没有 docker 命令):`docker build` 本身、容器内的非 root 权限与
 HEALTHCHECK 行为。这三项都用 [zcode-preflight.sh](zcode-preflight.sh) 兜底检查。
 
 ## 8. 说明

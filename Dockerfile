@@ -15,8 +15,6 @@
 
 ARG NODE_BASE_IMAGE=node:24.14.0-bookworm
 ARG PNPM_VERSION=10.33.2
-ARG APP_UID=1000
-ARG APP_GID=1000
 # Python / browser toolchain pins (overridable at build time)
 ARG UV_VERSION=0.13.7
 ARG PLAYWRIGHT_VERSION=1.59.1
@@ -113,15 +111,13 @@ RUN set -eux; \
     cp -a "/app/packages/desktop/bundled-agents/${AGENT_KEY}/glm/." /opt/zcode-agent/; \
     test -f /opt/zcode-agent/zcode.cjs; \
     echo "[zcode-web] build artifacts ok (agent=${AGENT_KEY})"; \
-    id node >/dev/null && echo "[zcode-web] node 用户: $(id -u node):$(id -g node)"
+    echo "[zcode-web] 始终以 root 运行,不创建 node 用户"
 
 # ============================================================================
-# Stage 2 · runtime —— 只留运行期需要的产物与依赖，非 root 运行
+# Stage 2 · runtime —— 只留运行期需要的产物与依赖,始终以 root 运行
 # ============================================================================
 FROM ${NODE_BASE_IMAGE} AS runtime
 
-ARG APP_UID=1000
-ARG APP_GID=1000
 ARG UV_VERSION=0.13.7
 ARG PLAYWRIGHT_VERSION=1.59.1
 ARG CHROME_DEB_URL=https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
@@ -143,8 +139,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ZCODE_DATA_DIR=/root/zcode/data \
     ZCODE_WORKSPACE=/root/zcode/workspace \
     ZCODE_SERVER_WORKSPACE=/root/zcode/workspace \
-    ZCODE_FIX_OWNERSHIP=1 \
-    ZCODE_DROP_PRIVILEGES=0 \
     PYTHONUNBUFFERED=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     UV_LINK_MODE=copy \
@@ -161,12 +155,7 @@ RUN set -eux; \
       procps tini util-linux \
       python3 python3-pip python3-venv python3-dev \
       fonts-liberation fonts-noto-cjk fonts-noto-color-emoji; \
-    rm -rf /var/lib/apt/lists/*; \
-    groupmod -o -g "${APP_GID}" node; \
-    # 只改 UID/GID,不动 home 目录 —— usermod -d 会把 /home/node 改名到 /root/... 而失败
-    # (exit 12: cannot rename directory /home/node to /root/zcode/data)。
-    # 非 root 回退(--user 1000:1000)时 HOME 由 --env/-e 指定为 /root,入口脚本负责建目录与改属主。
-    usermod -o -u "${APP_UID}" -g "${APP_GID}" -s /bin/bash node
+    rm -rf /var/lib/apt/lists/*
 
 # ---- Python 3 + uv -----------------------------------------------------------
 # Debian bookworm 自带 Python 3.11;pypi 包默认走系统解释器。uv 由官方 GitHub
@@ -274,7 +263,6 @@ COPY --from=builder /app/apps/zcode-cli/package.json /app/apps/zcode-cli/package
 # 想换位置:覆盖 ZCODE_DATA_DIR 与 ZCODE_WORKSPACE 两个环境变量即可。
 RUN set -eux; \
     mkdir -p /root /root/zcode/data /root/zcode/workspace /app/agent; \
-    chown -R "$(id -u):$(id -g)" /app /root; \
     chmod +x /app/agent/zcode.cjs; \
     if find /app/node_modules -name 'pty.node' -print -quit | grep -q .; then \
       echo "[zcode-web] node-pty 原生模块就位"; \
@@ -289,9 +277,7 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/zcode-preflight.
 VOLUME ["/root/zcode/data", "/root/zcode/workspace"]
 EXPOSE 3030
 
-# 运行身份:默认 root(容器内需要写挂载卷、装东西、改属主都最省事)。
-# 想回到非 root:--user 1000:1000 或 compose 里写 user: "1000:1000",
-# 此时把挂载目录 chown 到 1000:1000 即可(或先以 root 起一次让它自愈)。
+# 运行身份:始终以 root 运行,不提供非 root 切换。
 USER root
 
 # 未启用访问令牌时 /api/server-info 可直接探活；若设置了 ZCODE_SERVER_AUTH_TOKEN，
