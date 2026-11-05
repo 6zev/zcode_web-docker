@@ -87,7 +87,10 @@ pnpm --filter @zcode/web build                 # → packages/web/dist/
 
 卷:`/data`(必须持久化:登录、会话、插件缓存)、`/workspace`(你的代码)。
 
-> 权限提示:bind mount 到宿主机上**新建**的空目录时,目录属主是 root,非 root 容器写不进去。命名卷没这个问题(requests: Docker 会把镜像内 `/data` 的属主 1000:1000 复制给卷)。
+> 运行身份:镜像默认 **root**(挂载卷、改属主、临时装包都最省事);入口脚本启动时会把 `/data` 与
+> `/workspace` 的属主修正为当前 UID,所以 bind mount 到宿主机上新建的空目录也能直接跑。
+> 想改回非 root:`--user 1000:1000`(compose 里写 `user: "1000:1000"`),并 `sudo chown -R 1000:1000 <挂载目录>`,
+> 或先以 root 起一次让入口脚本把属主改好。
 
 ## 5. 构建后怎么验
 
@@ -110,7 +113,7 @@ Agent 入口与随包 `packages/bundled-skills`/`npm`、`/data` 与 `/workspace`
 | UI 能开,发消息报 `agent server command is not configured` | `/app/agent/zcode.cjs` 缺失(build 阶段 agent bundle 未成功) |
 | 官方插件、`/workflow` 技能缺失 | 只拷了单个 `zcode.cjs`。必须整目录拷 `bundled-agents/linux-x64/glm`(镜像里就是 `/app/agent`) |
 | 登录/对话超时 | 容器出网不通:`zcode.z.ai`、`api.z.ai`、`open.bigmodel.cn`;在 `.env` 里配 `HTTPS_PROXY` |
-| 启动即退出 + `EACCES: permission denied, mkdir '/data/.zcode'` | 宿主机上新建的挂载目录属主是 root,而容器内是非 root(UID 1000)。三选一:① 用命名卷 `-v zcode-data:/data`(Docker 会把镜像里 /data 的属主复制给卷);② `sudo chown -R 1000:1000 <挂载目录>`;③ `docker run --user root`(入口脚本会 chown 后自动降权到 1000 运行,可加 `ZCODE_FIX_OWNERSHIP=0` 关掉) |
+| 以非 root 跑时 `EACCES: permission denied, mkdir '/data/.zcode'` | 镜像默认是 **root** 运行(见下);若你显式改成 `--user 1000:1000`,挂载目录需要 `sudo chown -R 1000:1000 <目录>`,或先以 root 起一次让入口脚本修正属主,或改用命名卷 `-v zcode-data:/data` |
 | Agent 写不了 workspace(`EACCES`) | bind mount 属主不匹配,`sudo chown -R 1000:1000 <WORKSPACE_DIR>`,或 `--user root` 让入口脚本自愈 |
 | 设了 `ZCODE_SERVER_AUTH_TOKEN` 后 UI 连不上 ws | 首访必须带 `?token=` 换 Cookie;或直接不设令牌(默认) |
 | 终端(terminal)不可用 | `node-pty` 无官方 linux 预编译,构建期靠 g++ 现场编译;失败只影响终端,不阻断启动 |

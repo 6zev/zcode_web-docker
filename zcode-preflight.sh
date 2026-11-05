@@ -11,6 +11,7 @@ section() { printf '\n== %s ==\n' "$1"; }
 ok_or_bad() { if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
 section "进程 / Node"
+printf '  [info] 运行身份: UID=%s GID=%s (%s)\n' "$(id -u)" "$(id -g)" "$(id -un 2>/dev/null || echo '?')"
 ok_or_bad "node 可执行 ($(node -v 2>/dev/null))" "node -v"
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
 if [ "${NODE_MAJOR}" -ge 24 ]; then ok "node major >= 24(node:sqlite 需要)"; else bad "node major=${NODE_MAJOR} < 24"; fi

@@ -126,17 +126,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ZCODE_HOST=0.0.0.0 \
     ZCODE_SERVER_HOST=0.0.0.0 \
     ZCODE_WEB_STATIC_ROOT=/app/packages/web/dist \
-    HOME=/data \
-    PNPM_HOME=/data/.pnpm \
-    XDG_CACHE_HOME=/data/.cache \
+    HOME=/root \
     ZCODE_AGENT_SERVER_COMMAND=/app/agent/zcode.cjs \
     ZCODE_AGENT_SERVER_ARGS_JSON='["app-server","--stdio"]' \
     ZCODE_WORKSPACE=/workspace \
     ZCODE_SERVER_WORKSPACE=/workspace \
-    ZCODE_APP_UID=${APP_UID} \
-    ZCODE_APP_GID=${APP_GID} \
     ZCODE_FIX_OWNERSHIP=1 \
-    ZCODE_DROP_PRIVILEGES=1
+    ZCODE_DROP_PRIVILEGES=0
 
 # hadolint ignore=DL3008
 RUN set -eux; \
@@ -168,7 +164,7 @@ COPY --from=builder /app/apps/zcode-cli/package.json /app/apps/zcode-cli/package
 # 数据卷：/data 是 HOME（凭据、会话库、插件缓存），/workspace 是默认工作目录
 RUN set -eux; \
     mkdir -p /data /workspace /app/agent; \
-    chown -R "${APP_UID}:${APP_GID}" /app /data /workspace; \
+    chown -R "$(id -u):$(id -g)" /app /data /workspace; \
     chmod +x /app/agent/zcode.cjs; \
     if find /app/node_modules -name 'pty.node' -print -quit | grep -q .; then \
       echo "[zcode-web] node-pty 原生模块就位"; \
@@ -183,7 +179,10 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/zcode-preflight.
 VOLUME ["/data", "/workspace"]
 EXPOSE 3030
 
-USER ${APP_UID}:${APP_GID}
+# 运行身份:默认 root(容器内需要写挂载卷、装东西、改属主都最省事)。
+# 想回到非 root:--user 1000:1000 或 compose 里写 user: "1000:1000",
+# 此时把挂载目录 chown 到 1000:1000 即可(或先以 root 起一次让它自愈)。
+USER root
 
 # 未启用访问令牌时 /api/server-info 可直接探活；若设置了 ZCODE_SERVER_AUTH_TOKEN，
 # 该路径会 401，此时探首页静态资源（静态资源不受令牌保护）。
