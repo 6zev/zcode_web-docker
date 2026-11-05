@@ -212,6 +212,37 @@ jobs:
         if: steps.cfg.outputs.smoke == 'true'
         run: docker exec zcode-smoke /usr/local/bin/zcode-preflight.sh
 
+      - name: 网关冒烟(无需 zcode:用 whoami 当上游,验证 Basic Auth + 反代 + 401)
+        if: steps.cfg.outputs.smoke == 'true'
+        run: |
+          set -eux
+          docker network create zc-gw-net >/dev/null 2>&1 || true
+          docker run -d --rm --name zc-upstream --network zc-gw-net traefik/whoami:v1.10.2 >/dev/null
+          docker run -d --rm --name zc-gateway --network zc-gw-net -p 18080:80 \
+            -e ZCODE_AUTH_USER=zcode -e ZCODE_AUTH_PASSWORD=s3cret -e ZCODE_UPSTREAM=zc-upstream:80 \
+            -v "$PWD/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -v "$PWD/gateway/docker-entrypoint.sh:/usr/local/bin/gateway-entrypoint.sh:ro" \
+            --entrypoint /bin/sh caddy:2 /usr/local/bin/gateway-entrypoint.sh
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18080/ || true)"
+            [ "${code}" = "401" ] && break
+            sleep 2
+          done
+          echo "无凭据(期望 401): ${code}"
+          [ "${code}" = "401" ]
+          ok="$(curl -s -o /dev/null -w '%{http_code}' -u zcode:s3cret http://127.0.0.1:18080/)"
+          echo "正确口令(期望 200): ${ok}"
+          [ "${ok}" = "200" ]
+          bad="$(curl -s -o /dev/null -w '%{http_code}' -u zcode:wrong http://127.0.0.1:18080/)"
+          echo "错误口令(期望 401): ${bad}"
+          [ "${bad}" = "401" ]
+          who="$(curl -s -u zcode:s3cret http://127.0.0.1:18080/ | grep -c 'Hostname' || true)"
+          echo "反代到上游(whoami Hostname 行数): ${who}"
+          [ "${who}" -ge 1 ]
+          docker logs zc-gateway 2>&1 | tail -30 || true
+          docker rm -f zc-gateway zc-upstream >/dev/null 2>&1 || true
+          docker network rm zc-gw-net >/dev/null 2>&1 || true
+
       - name: 失败时导出日志
         if: failure()
         run: |
