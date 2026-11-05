@@ -69,12 +69,13 @@ services:
       ZCODE_AUTH_HASH: ${GATEWAY_AUTH_HASH:-}
       ZCODE_AUTH_REALM: ${GATEWAY_AUTH_REALM:-ZCode}
       ZCODE_UPSTREAM: zcode-web:3030
+      ZCODE_LISTEN_PORT: "80"
       # 限速(挡暴力破解);浏览器首屏会并发几十个请求,burst 给小了会 503
       ZCODE_RATE: ${GATEWAY_RATE:-20r/s}
       ZCODE_BURST: ${GATEWAY_BURST:-200}
       TZ: ${TZ:-Asia/Saigon}
     volumes:
-      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]

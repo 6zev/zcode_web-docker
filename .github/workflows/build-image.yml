@@ -91,16 +91,14 @@ jobs:
           print('compose ok: gateway 暴露', gw_ports, '/ zcode-web 未发布端口')
           PY
 
-      - name: 校验网关 nginx.conf(官方 nginx 镜像,含 ${VAR} 替换)
+      - name: 校验网关(用官方 nginx 镜像跑入口脚本 + nginx -t)
         run: |
           set -eux
           docker run --rm \
-            -e ZCODE_UPSTREAM=zcode-web:3030 \
-            -e ZCODE_AUTH_REALM=ZCode \
-            -e ZCODE_RATE=20r/s \
-            -e ZCODE_BURST=200 \
-            -v "$PWD/gateway/nginx.conf:/etc/nginx/nginx.conf:ro" \
-            nginx:1.27-alpine sh -c 'envsubst "\$ZCODE_UPSTREAM \$ZCODE_AUTH_REALM \$ZCODE_RATE \$ZCODE_BURST" </etc/nginx/nginx.conf >/tmp/nginx.conf && nginx -t -c /tmp/nginx.conf'
+            -e ZCODE_UPSTREAM=zcode-web:3030 -e ZCODE_AUTH_PASSWORD=smoke \
+            -v "$PWD/gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro" \
+            -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
+            nginx:1.27-alpine sh -c 'sh /docker-entrypoint.d/10-zcode-auth.sh'
 
       - name: 校验网关入口脚本(nginx + caddy)
         run: |
@@ -227,7 +225,7 @@ jobs:
           docker run -d --rm --name zc-gateway --network zc-gw-net -p 18080:80 \
             -e ZCODE_AUTH_USER=zcode -e ZCODE_AUTH_PASSWORD=s3cret -e ZCODE_UPSTREAM=zc-upstream:80 \
             -e ZCODE_RATE=50r/s -e ZCODE_BURST=200 \
-            -v "$PWD/gateway/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "$PWD/gateway/nginx.conf.template:/etc/nginx/nginx.conf.template:ro" \
             -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
             nginx:1.27-alpine
           for i in $(seq 1 30); do
