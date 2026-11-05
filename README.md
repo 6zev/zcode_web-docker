@@ -33,7 +33,8 @@ docker run -d --name zcode-web -p 127.0.0.1:3030:3030 \
 |---|---|
 | [Dockerfile](Dockerfile) | 两阶段:`builder`(克隆官方仓库 + 构建 server/web/agent)→ `runtime`(非 root、tini、HEALTHCHECK) |
 | [docker-compose.yml](docker-compose.yml) | 一条命令起服务:gateway(对外入口)+ zcode-web(内部) |
-| [gateway/Caddyfile](gateway/Caddyfile) | 网关配置:Basic Auth + 反代(含 WebSocket 透传) |
+| [gateway/nginx.conf](gateway/nginx.conf) | **默认网关**:nginx 配置(Basic Auth + 反代 + WebSocket + 限速) |
+| [gateway/Caddyfile](gateway/Caddyfile) | 备用网关:同功能的 Caddy 实现(自动 HTTPS,`--profile caddy`) |
 | [docker-entrypoint.sh](docker-entrypoint.sh) | 准备数据目录、首次铺默认设置、打印启动诊断 |
 | [zcode-preflight.sh](zcode-preflight.sh) | 镜像自检:产物 / 权限 / 网络 / 健康 |
 | [.github/workflows/build-image.yml](.github/workflows/build-image.yml) | CI:hadolint/Caddyfile 门禁 + 构建推送 GHCR + 网关端到端冒烟测试 |
@@ -65,11 +66,20 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 ## 访问保护(网关)
 
 ```
-浏览器 ──Basic Auth──▶ gateway(caddy,对外 8080) ──▶ zcode-web:3030(不发布端口)
+浏览器 ──Basic Auth──▶ gateway(nginx:1.27-alpine,对外 8080) ──▶ zcode-web:3030(不发布端口)
 ```
 
-- 所有请求(含 WebSocket `/ws`)都必须先过 Basic Auth;未认证返回 401,不会碰到 zcode。
-- 改口令:改 `.env` 里的 `GATEWAY_AUTH_PASSWORD` 再 `docker compose up -d gateway`(口令在容器启动时算成 bcrypt 哈希);也可以直接给 `GATEWAY_AUTH_HASH`。
-- 要 HTTPS:`GATEWAY_TLS="tls you@example.com"`(公网域名自动签)或 `"tls internal"`(自签),并把 `GATEWAY_PORT` 映射到 443。
-- 想彻底关掉网关只要直连:`docker compose stop gateway`,然后取消 compose 里 zcode-web 的 `ports` 注释。
-- 双保险:除网关外还可以用 zcode 自带的令牌 —— 设 `ZCODE_SERVER_AUTH_TOKEN=<随机串>`,首次访问 `http://<host>:8080/?token=<随机串>` 换成 Cookie 即可(此路径 `/api`、`/ws` 都要令牌)。
+- 所有请求(含 WebSocket `/ws`)都必须先过 Basic Auth;未认证 401,不会碰到 zcode。
+- 改口令:改 `.env` 的 `GATEWAY_AUTH_PASSWORD` 再 `docker compose up -d gateway`(口令在容器启动时算成 apr1 哈希);也可以直接给 `GATEWAY_AUTH_HASH`。
+- 限速:`GATEWAY_RATE`(默认 20r/s)+ `GATEWAY_BURST`(默认 200)。**burst 给小了浏览器首屏会 503**,调大即可。
+- 上游用变量 + Docker 内嵌 DNS 解析,**zcode 晚启动或重建容器都不会让网关启动失败**。
+
+### 三种网关,按需选(默认 A)
+
+| 方案 | 怎么做 | 开销 |
+|---|---|---|
+| **A · nginx(默认)** | `docker compose up -d` | 镜像 ~20MB,内存约 5–10MB |
+| **B · Caddy(功能多)** | `docker compose --profile caddy up -d`(另有自动 HTTPS、访问日志面板) | 镜像 ~24MB,内存约 20–40MB |
+| **C · 零额外容器** | 不用代理:给 zcode-web 打开 `ports`,并设 `ZCODE_SERVER_AUTH_TOKEN=<随机串>`;首次访问 `http://host:3030/?token=<随机串>` 换 Cookie 即可(`/api` 与 `/ws` 都受保护) | 0 额外内存,但没有 TLS 终止、没有统一限速 |
+
+要 HTTPS:方案 A 挂证书并打开 `nginx.conf` 里注释的两行(把端口映射到 443);方案 B 直接 `GATEWAY_TLS="tls you@example.com"`。

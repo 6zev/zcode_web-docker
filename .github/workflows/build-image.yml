@@ -91,16 +91,22 @@ jobs:
           print('compose ok: gateway 暴露', gw_ports, '/ zcode-web 未发布端口')
           PY
 
-      - name: 校验 Caddyfile(官方 caddy 镜像)
+      - name: 校验网关 nginx.conf(官方 nginx 镜像,含 ${VAR} 替换)
         run: |
           set -eux
-          docker run --rm -v "$PWD/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            -e ZCODE_AUTH_USER=zcode \
-            -e ZCODE_AUTH_HASH="$(docker run --rm caddy:2 caddy hash-password --plaintext zcode | base64 -w0)" \
-            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm \
+            -e ZCODE_UPSTREAM=zcode-web:3030 \
+            -e ZCODE_AUTH_REALM=ZCode \
+            -e ZCODE_RATE=20r/s \
+            -e ZCODE_BURST=200 \
+            -v "$PWD/gateway/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:1.27-alpine sh -c 'envsubst "\$ZCODE_UPSTREAM \$ZCODE_AUTH_REALM \$ZCODE_RATE \$ZCODE_BURST" </etc/nginx/nginx.conf >/tmp/nginx.conf && nginx -t -c /tmp/nginx.conf'
 
-      - name: 校验网关入口脚本
-        run: sh -n gateway/docker-entrypoint.sh && which sh
+      - name: 校验网关入口脚本(nginx + caddy)
+        run: |
+          set -eux
+          sh -n gateway/nginx-entrypoint.sh
+          sh -n gateway/docker-entrypoint.sh
 
   # 真构建：单平台时顺便 load 到本地跑冒烟测试；push 事件推送到 GHCR
   build:
@@ -212,7 +218,7 @@ jobs:
         if: steps.cfg.outputs.smoke == 'true'
         run: docker exec zcode-smoke /usr/local/bin/zcode-preflight.sh
 
-      - name: 网关冒烟(无需 zcode:用 whoami 当上游,验证 Basic Auth + 反代 + 401)
+      - name: 网关冒烟(无需 zcode:用 whoami 当上游,验证 Basic Auth + 反代 + 401 + WebSocket)
         if: steps.cfg.outputs.smoke == 'true'
         run: |
           set -eux
@@ -220,9 +226,10 @@ jobs:
           docker run -d --rm --name zc-upstream --network zc-gw-net traefik/whoami:v1.10.2 >/dev/null
           docker run -d --rm --name zc-gateway --network zc-gw-net -p 18080:80 \
             -e ZCODE_AUTH_USER=zcode -e ZCODE_AUTH_PASSWORD=s3cret -e ZCODE_UPSTREAM=zc-upstream:80 \
-            -v "$PWD/gateway/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            -v "$PWD/gateway/docker-entrypoint.sh:/usr/local/bin/gateway-entrypoint.sh:ro" \
-            --entrypoint /bin/sh caddy:2 /usr/local/bin/gateway-entrypoint.sh
+            -e ZCODE_RATE=50r/s -e ZCODE_BURST=200 \
+            -v "$PWD/gateway/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v "$PWD/gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro" \
+            nginx:1.27-alpine
           for i in $(seq 1 30); do
             code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18080/ || true)"
             [ "${code}" = "401" ] && break
@@ -239,6 +246,12 @@ jobs:
           who="$(curl -s -u zcode:s3cret http://127.0.0.1:18080/ | grep -c 'Hostname' || true)"
           echo "反代到上游(whoami Hostname 行数): ${who}"
           [ "${who}" -ge 1 ]
+          # WebSocket 升级:带凭据时上游必须看到 Upgrade(whoami 会回显头)
+          up="$(curl -s -u zcode:s3cret -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+            -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+            http://127.0.0.1:18080/ | grep -ci 'Upgrade: websocket' || true)"
+          echo "WebSocket 升级头透传到上游(命中数): ${up}"
+          [ "${up}" -ge 1 ]
           docker logs zc-gateway 2>&1 | tail -30 || true
           docker rm -f zc-gateway zc-upstream >/dev/null 2>&1 || true
           docker network rm zc-gw-net >/dev/null 2>&1 || true

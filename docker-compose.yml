@@ -50,13 +50,13 @@ services:
     stop_grace_period: 30s
 
   # ---------------------------------------------------------------------------
-  # 网关:反向代理 + Basic Auth,唯一对外入口(默认 8080)
+  # 网关 A(默认,轻):nginx:1.27-alpine —— Basic Auth + 反代,内存 ~5-10MB
   #   - zcode 的 3030 不发布,只有网关能访问
   #   - 所有请求(含 WebSocket /ws)先过 Basic Auth 再转发
   #   - 默认账号 zcode / 口令 zcode,上线前必须用 GATEWAY_AUTH_PASSWORD 改掉
   # ---------------------------------------------------------------------------
   gateway:
-    image: ${GATEWAY_IMAGE:-caddy:2}
+    image: ${GATEWAY_IMAGE:-nginx:1.27-alpine}
     container_name: zcode-gateway
     restart: unless-stopped
     depends_on:
@@ -64,24 +64,18 @@ services:
     ports:
       - "${GATEWAY_BIND_HOST:-0.0.0.0}:${GATEWAY_PORT:-8080}:80"
     environment:
-      # 用户名 / 口令哈希(哈希为空时由 gateway/docker-entrypoint.sh 用口令现算)
       ZCODE_AUTH_USER: ${GATEWAY_AUTH_USER:-zcode}
       ZCODE_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-zcode}
       ZCODE_AUTH_HASH: ${GATEWAY_AUTH_HASH:-}
+      ZCODE_AUTH_REALM: ${GATEWAY_AUTH_REALM:-ZCode}
       ZCODE_UPSTREAM: zcode-web:3030
-      ZCODE_LISTEN: ":80"
-      # 需要 TLS 时打开,例如:
-      #   ZCODE_TLS=tls internal            自签(局域网)
-      #   ZCODE_TLS="tls you@example.com"   公网域名自动签 Let's Encrypt
-      # 并把端口映射改成 443
-      ZCODE_TLS: ${GATEWAY_TLS:-}
+      # 限速(挡暴力破解);浏览器首屏会并发几十个请求,burst 给小了会 503
+      ZCODE_RATE: ${GATEWAY_RATE:-20r/s}
+      ZCODE_BURST: ${GATEWAY_BURST:-200}
       TZ: ${TZ:-Asia/Saigon}
     volumes:
-      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./gateway/docker-entrypoint.sh:/usr/local/bin/gateway-entrypoint.sh:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    entrypoint: ["/bin/sh", "/usr/local/bin/gateway-entrypoint.sh"]
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/nginx-entrypoint.sh:/docker-entrypoint.d/10-zcode-auth.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/ || exit 1"]
       interval: 30s
@@ -90,6 +84,43 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
+  # 网关 B(可选,功能多):caddy —— 自动 HTTPS / 看板 / 更少配置
+  #   启用:docker compose --profile caddy up -d
+  #   然后访问 compose 里映射的端口(默认 8081),或把网关 A 停掉后改用 8080
+  # ---------------------------------------------------------------------------
+  gateway-caddy:
+    profiles: ["caddy"]
+    image: ${GATEWAY_CADDY_IMAGE:-caddy:2-alpine}
+    container_name: zcode-gateway-caddy
+    restart: unless-stopped
+    depends_on:
+      - zcode-web
+    ports:
+      - "${GATEWAY_CADDY_PORT:-8081}:80"
+    environment:
+      ZCODE_AUTH_USER: ${GATEWAY_AUTH_USER:-zcode}
+      ZCODE_AUTH_PASSWORD: ${GATEWAY_AUTH_PASSWORD:-zcode}
+      ZCODE_AUTH_HASH: ${GATEWAY_AUTH_HASH:-}
+      ZCODE_UPSTREAM: zcode-web:3030
+      ZCODE_LISTEN: ":80"
+      ZCODE_TLS: ${GATEWAY_TLS:-}
+      TZ: ${TZ:-Asia/Saigon}
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./gateway/docker-entrypoint.sh:/usr/local/bin/gateway-entrypoint.sh:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    entrypoint: ["/bin/sh", "/usr/local/bin/gateway-entrypoint.sh"]
+    security_opt:
+      - no-new-privileges:true
+
+  # ---------------------------------------------------------------------------
+  # 网关 C(最轻,零额外容器):不用任何代理,靠 zcode 自带的令牌
+  #   设 ZCODE_SERVER_AUTH_TOKEN=<随机串>,给 zcode-web 取消 ports 注释,
+  #   首次访问 http://<host>:3030/?token=<随机串> 换成 Cookie 即可(/api 与 /ws 都受保护)。
+  # ---------------------------------------------------------------------------
 
 volumes:
   zcode-data:

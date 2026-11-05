@@ -42,7 +42,8 @@ docker run -d --name zcode-web -p 3030:3030 \
 | [zcode-web.docker.json](zcode-web.docker.json) | 清单:版本、产物路径、运行期环境变量 |
 | [VERIFY-NOTES.md](VERIFY-NOTES.md) | 逐条源码核对记录(每条带 `file:line`),Dockerfile 的依据 |
 | [screenshots/](screenshots) | 真实渲染验证的截图 |
-| [.github/workflows/build-image.yml](.github/workflows/build-image.yml) | CI:构建并推送 GHCR + 冒烟测试 |
+| [.github/workflows/build-image.yml](.github/workflows/build-image.yml) | CI:构建并推送 GHCR + 冒烟测试(含网关) |
+| [gateway/nginx.conf](gateway/nginx.conf) | 默认网关:nginx Basic Auth + 反代 + WebSocket + 限速 |
 
 ## 3. 构建到底做了什么(照源码对齐上游)
 
