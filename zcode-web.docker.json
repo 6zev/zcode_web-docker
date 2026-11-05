@@ -89,7 +89,7 @@
   },
   "patch": {
     "file": "patches/standalone-web-local-host.patch",
-    "purpose": "纯浏览器模式可用:project service 把 hostId=local 归一到服务器自身 ownerHostId,允许浏览目录/创建 project/准备草稿;prepareSession 对显式 local 的远端请求放行;草稿目录优先用 ZCODE_SERVER_WORKSPACE;草稿目录优先 ZCODE_SERVER_WORKSPACE(默认 /root)",
+    "purpose": "纯浏览器模式可用:hostId=local 归一到服务器自身——①project service route() 路由归一(浏览目录);②saveProject 归一+放行浏览器 reuseExistingRoot(创建/复用 project);③repository 复用守卫对 owner host 例外(host-immutable 修复);④prepareSession 对显式 local 放行草稿;草稿目录优先 ZCODE_SERVER_WORKSPACE。vitest 8/8(先复现 host-offline/remote-project-required/host-immutable 再全绿)。",
     "verified": "vitest 单测 5/5(对真实 createProjectService):before 复现 host-offline/remote-project-required,after 全绿;entry-http 重建后本地 boot server-info OK;channel mapper 只改 workspace identity,不改 hostId"
   }
 }

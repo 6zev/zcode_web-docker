@@ -16,7 +16,20 @@
    };
    const creationFlights = new Map<string, Promise<ProjectDirectories>>();
    const changed = async () => {
-@@ -282,7 +286,10 @@
+@@ -195,7 +199,11 @@
+     },
+     async saveProject(input) {
+       input = saveProjectSchema.parse(input);
+-      if (input.reuseExistingRoot && options.ownerHostId && options.ownerHostId !== "local")
++      // 单用户本地 Docker:浏览器显式 hostId="local" 归一到服务器自身身份(与 route()
++      // 一致);仓库层把存储行强制写 ownerHostId,不改写会触发 project.host-immutable。
++      const fromLocalBrowser = input.hostId === "local" && Boolean(options.ownerHostId);
++      if (fromLocalBrowser) input = { ...input, hostId: options.ownerHostId };
++      if (input.reuseExistingRoot && options.ownerHostId && options.ownerHostId !== "local" && !fromLocalBrowser)
+         throw new Error("project.invalid-directory-open");
+       const remote = await route(input.hostId);
+       if (remote) return remote.saveProject(input);
+@@ -282,7 +290,10 @@
        const id = params?.projectId;
        const remoteOwner = Boolean(options.ownerHostId && options.ownerHostId !== "local");
        // 旧入口可绕过项目直接在远端 mkdir；必须在目录或会话副作用之前拒绝。
@@ -42,3 +55,16 @@
      afterChange: publishProjectChange,
      // zcodeAgentService 在下方创建；端口只在命令执行时取用它。
      data: {
+--- a/packages/services/src/project-storage/project-repository.ts
++++ b/packages/services/src/project-storage/project-repository.ts
+@@ -244,7 +244,9 @@
+       const roots = [...new Set(input.roots ?? old?.roots.map((root) => root.rootPath) ?? [])];
+       assertRemoteProjectRoots(this.ownerHostId, roots, old);
+       if (input.reuseExistingRoot) {
+-        if (hostId !== "local" || old || roots.length !== 1)
++        // 单用户本地 Docker:owner host 即浏览器眼里的“本机”,允许复用已有目录
++        // (desktop-attached 远端入口不带 hostId,仍维持 local-only 限制)。
++        if ((hostId !== "local" && input.hostId !== this.ownerHostId) || old || roots.length !== 1)
+           throw new Error("project.invalid-directory-open");
+         // 系统打开目录曾只建立 workspace，导致草稿没有项目；查找和创建必须在同一
+         // 写事务内完成，避免多窗口并发右键创建重复项目。复用不改已有名称、roots 或排序。
