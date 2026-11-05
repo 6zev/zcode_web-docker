@@ -19,7 +19,9 @@ services:
     init: true
     # 对外入口:用 zcode 自带的令牌保护(ZCODE_SERVER_AUTH_TOKEN),不需要任何代理容器。
     # /api/* 与 /ws 都要求令牌;首次访问 http://<host>:3030/?token=<令牌> 换成 Cookie 即可。
+    # 不设令牌也能启动(方便本机/内网试跑),但启动日志会打印醒目警告,端口就成了裸奔。
     # 需要 TLS/限速/只开一个端口时,再叠加 --profile nginx 或 --profile caddy。
+    # 对外端口(裸奔风险见上;需要收敛入口就用 --profile nginx)
     ports:
       - "${BIND_HOST:-0.0.0.0}:${BIND_PORT:-3030}:3030"
     environment:
@@ -31,9 +33,9 @@ services:
       ZCODE_WORKSPACE: /root/zcode/workspace
       ZCODE_WEB_STATIC_ROOT: /app/packages/web/dist
       TZ: ${TZ:-Asia/Saigon}
-      # 可选访问令牌（见 .env.example）
-      # 必填:没配就报错,避免不小心把服务公开出去。生成: openssl rand -hex 24
-      ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:?missing — set ZCODE_SERVER_AUTH_TOKEN in .env (openssl rand -hex 24)}
+      # 访问令牌。留空 = 不开启令牌保护(此时任何能访问本端口的人都能用,启动日志会大声警告)。
+      # 生成: openssl rand -hex 24
+      ZCODE_SERVER_AUTH_TOKEN: ${ZCODE_SERVER_AUTH_TOKEN:-}
       # 可选代理
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}

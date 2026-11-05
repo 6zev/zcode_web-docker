@@ -8,11 +8,14 @@
 ```bash
 cd /root/zcode-web-docker
 cp .env.example .env
-echo "ZCODE_SERVER_AUTH_TOKEN=$(openssl rand -hex 24)" >> .env   # 生成令牌
+echo "ZCODE_SERVER_AUTH_TOKEN=$(openssl rand -hex 24)" >> .env   # 生成令牌(建议)
 cat .env | grep TOKEN                                            # 记下它
 docker compose up -d --build
 # 首次访问: http://<服务器IP>:3030/?token=<令牌>   → 换成 Cookie 后正常用
 ```
+
+不设令牌也能启动(方便本机试跑),但**容器启动日志会打印醒目警告**,端口就等于裸奔 ——
+真要在无令牌状态下跑,请把 `BIND_HOST` 设成 `127.0.0.1`,别直接暴露到公网。
 
 之后浏览器直接开 `http://<IP>:3030/` 即可(令牌已在 Cookie 里);换令牌会让所有旧 Cookie 立刻失效。
 凭据落在 `/root/zcode/data` 卷,重建容器不掉登录。
@@ -67,7 +70,7 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 
 - 令牌保护的是 `/api/*` 与 `/ws`(也就是所有真实数据和操作);静态页面本身不含数据。
 - 三种带令牌的方式:`?token=<令牌>`(会写 Cookie,最方便)、`Authorization: Bearer <令牌>`、或 Cookie。
-- 令牌没配时 `docker compose up` **直接报错**,不会静默变成公开服务。
+- 令牌没配时仍能启动,但启动日志有醒目警告(`未设置 ZCODE_SERVER_AUTH_TOKEN —— 本服务没有访问保护`),并把可用端口提示出来。
 - 令牌留在 `./token/token.txt`(bind mount,方便随时查看/轮换)。
 - 轮换:改 `.env` 里的值 → `docker compose up -d zcode-web`。
 

@@ -80,7 +80,7 @@ pnpm --filter @zcode/web build                 # → packages/web/dist/
 | `ZCODE_SERVER_WORKSPACE` | `/root/zcode/workspace` | 默认工作区(未设则取 `process.cwd()`) |
 | `ZCODE_AGENT_SERVER_COMMAND` | `/app/agent/zcode.cjs` | Agent 入口;显式设置优先级最高 |
 | `ZCODE_AGENT_SERVER_ARGS_JSON` | `["app-server","--stdio"]` | 必须是 JSON 字符串数组 |
-| `ZCODE_SERVER_AUTH_TOKEN` | *(必填)* | 设了之后 `/api/*`、`/ws` 要求令牌,首访需 `http://host:3030/?token=<值>` 换 Cookie |
+| `ZCODE_SERVER_AUTH_TOKEN` | *(建议)* | 设了之后 `/api/*`、`/ws` 要求令牌,首访需 `http://host:3030/?token=<值>` 换 Cookie |
 
 > 只有 `HOME` + `ZCODE_DATA_BASE_DIR` 是**必须**成对设置的:`HOME` 管 settings/会话库,
 > `ZCODE_DATA_BASE_DIR` 管 `v2/`。只设后者会让状态分裂到 `/root/.zcode` 与 `/root/zcode/data` 两处。
