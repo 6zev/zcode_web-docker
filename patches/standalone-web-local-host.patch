@@ -68,3 +68,15 @@
            throw new Error("project.invalid-directory-open");
          // 系统打开目录曾只建立 workspace，导致草稿没有项目；查找和创建必须在同一
          // 写事务内完成，避免多窗口并发右键创建重复项目。复用不改已有名称、roots 或排序。
+--- a/packages/ui/src/project-sidebar/ProjectCreation.tsx
++++ b/packages/ui/src/project-sidebar/ProjectCreation.tsx
+@@ -143,7 +143,7 @@
+   const saved = async (project: VirtualProject) => {
+     if (!active.current) return;
+     if (project.hostId !== "local") {
+-      const host = admittedHosts.current.get(project.hostId);
++      const host = admittedHosts.current.get(project.hostId) ?? (await remoteService.readDirectory()).hosts.find((h) => h.id === project.hostId);
+       if (!host) throw new Error("remote-project.host-removed");
+       await remoteService.addEntry({
+         hostId: project.hostId,
+
