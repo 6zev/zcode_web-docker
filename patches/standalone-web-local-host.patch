@@ -70,13 +70,25 @@
          // 写事务内完成，避免多窗口并发右键创建重复项目。复用不改已有名称、roots 或排序。
 --- a/packages/ui/src/project-sidebar/ProjectCreation.tsx
 +++ b/packages/ui/src/project-sidebar/ProjectCreation.tsx
-@@ -143,7 +143,7 @@
+@@ -78,3 +78,4 @@
+   });
+   const active = useRef(true);
++  const creatingOnLocalServer = useRef(false);
+   const admittedHosts = useRef(new Map(directory.hosts.map((host) => [host.id, host])));
+@@ -143,5 +144,5 @@
    const saved = async (project: VirtualProject) => {
      if (!active.current) return;
-     if (project.hostId !== "local") {
+-    if (project.hostId !== "local") {
++    if (project.hostId !== "local" && !creatingOnLocalServer.current) {
 -      const host = admittedHosts.current.get(project.hostId);
 +      const host = admittedHosts.current.get(project.hostId) ?? (await remoteService.readDirectory()).hosts.find((h) => h.id === project.hostId);
        if (!host) throw new Error("remote-project.host-removed");
-       await remoteService.addEntry({
-         hostId: project.hostId,
+@@ -230,4 +231,7 @@
+         onSaved={saved}
+         onBeforeSave={async (hostId) => {
++          // standalone Web 的服务端把 local 持久化为 ownerHostId；saved() 收到的
++          // hostId 因而非 local，但它仍是本机项目，不应要求远端设备成员记录。
++          creatingOnLocalServer.current = hostId === "local";
+           await prepareHost(hostId);
+         }}
 
