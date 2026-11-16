@@ -7,3 +7,6 @@ workspace/
 screenshots/*.tmp
 *.log
 node_modules/
+
+# 本地校验脚本输出/临时产物,不进仓库
+verification/*.log

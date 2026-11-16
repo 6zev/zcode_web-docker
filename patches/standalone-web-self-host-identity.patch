@@ -1,0 +1,317 @@
+diff --git a/packages/services/src/node.ts b/packages/services/src/node.ts
+--- a/packages/services/src/node.ts
++++ b/packages/services/src/node.ts
+@@ -2363,23 +2366,40 @@ export function createLocalServices(options: {
+   });
+   const taskGroupService = createTaskGroupService({
+     database: () => taskIndexRepo.getOrganizationDatabase(),
++    ownerHostId: options?.projectStorageHostId,
+     resolveTasks: async (refs) => {
+       // 只读所属 Host 的权威目录；项目路由不会为分组建立连接或启动 Agent。
++      // standalone Web 将浏览器本机标记为 local，但任务索引用 ownerHostId 持久化。
+       const hostIds = [...new Set(refs.map((task) => task.hostId))];
+       const results = await Promise.all(
+         hostIds.map(async (hostId) => {
+-          const tree = await projectService.readTree({ hostId, includeDeletedTasks: true });
+-          const facts = new Map(
+-            [
+-              ...tree.tasks,
+-              ...(tree.deletedTasks ?? []).map((task) => ({ ...task, deleted: true })),
+-            ].map((task) => [groupTaskKey(task), task]),
++          const resolvedHostId =
++            hostId === "local" && options?.projectStorageHostId
++              ? options.projectStorageHostId
++              : hostId;
++          const tree = await projectService.readTree({
++            hostId: resolvedHostId,
++            includeDeletedTasks: true,
++          });
++          const allFacts = [
++            ...tree.tasks,
++            ...(tree.deletedTasks ?? []).map((task) => ({ ...task, deleted: true })),
++          ];
++          const facts = new Map(allFacts.map((task) => [groupTaskKey(task), task]));
++          const factsByPath = new Map(
++            allFacts.map((task) => [JSON.stringify([task.workspacePath, task.taskId]), task]),
+           );
+           return refs
+             .filter((ref) => ref.hostId === hostId)
+             .flatMap((ref) => {
+-              const fact = facts.get(groupTaskKey(ref));
+-              return fact && fact.hostId === ref.hostId && fact.workspacePath === ref.workspacePath
++              const fact =
++                facts.get(groupTaskKey(ref)) ??
++                (ref.workspaceIdentity
++                  ? undefined
++                  : factsByPath.get(JSON.stringify([ref.workspacePath, ref.taskId])));
++              return fact &&
++                fact.hostId === resolvedHostId &&
++                fact.workspacePath === ref.workspacePath
+                 ? [{ ...fact, ...ref }]
+                 : [];
+             });
+diff --git a/packages/services/src/task-groups/index.ts b/packages/services/src/task-groups/index.ts
+index 4381e8ed..c64218e2 100644
+--- a/packages/services/src/task-groups/index.ts
++++ b/packages/services/src/task-groups/index.ts
+@@ -22,21 +22,39 @@ const taskSchema = z
+     workspaceIdentity: z.string().trim().min(1).optional(),
+     taskId: z.string().min(1),
+   })
+-  .strict()
+-  .refine(
++  .strict();
++function taskSchemaForOwner(ownerHostId?: string) {
++  return taskSchema.refine(
+     (task) =>
+-      (remoteHostIdFromWorkspaceIdentity(task.workspaceIdentity ?? "") ?? "local") === task.hostId,
++      (remoteHostIdFromWorkspaceIdentity(task.workspaceIdentity ?? "") ?? "local") ===
++        task.hostId ||
++      (!task.workspaceIdentity && task.hostId === ownerHostId),
+     "task-group.host-identity-mismatch",
+   );
+-const nodeSchema = z.discriminatedUnion("type", [
+-  z.object({ type: z.literal("group"), groupId: z.string().min(1) }).strict(),
+-  z.object({ type: z.literal("task"), task: taskSchema }).strict(),
+-]);
++}
++const nodeSchemaForOwner = (ownerHostId?: string) => {
++  const task = taskSchemaForOwner(ownerHostId);
++  return z.discriminatedUnion("type", [
++    z.object({ type: z.literal("group"), groupId: z.string().min(1) }).strict(),
++    z.object({ type: z.literal("task"), task }).strict(),
++  ]);
++};
++function matchesTaskFact(fact: GroupTaskFact, ref: GroupTaskRef): boolean {
++  return (
++    fact.hostId === ref.hostId &&
++    fact.workspacePath === ref.workspacePath &&
++    (groupTaskKey(fact) === groupTaskKey(ref) ||
++      (!ref.workspaceIdentity && fact.taskId === ref.taskId))
++  );
++}
+ export function createTaskGroupService(options: {
+   database(): Promise<DatabaseSync>;
+   resolveTasks(tasks: GroupTaskRef[]): Promise<GroupTaskFact[]>;
+   afterChange(): Promise<void>;
++  ownerHostId?: string;
+ }): ITaskGroupService {
++  const taskSchema = taskSchemaForOwner(options.ownerHostId);
++  const nodeSchema = nodeSchemaForOwner(options.ownerHostId);
+   const repository = async () => new TaskGroupRepository(await options.database());
+   const changed = async (run: (repo: TaskGroupRepository) => void) => {
+     const repo = await repository();
+@@ -82,14 +100,7 @@ export function createTaskGroupService(options: {
+         facts.length !== refs.length ||
+         refs.some(
+           (ref) =>
+-            !facts.some(
+-              (task) =>
+-                groupTaskKey(task) === groupTaskKey(ref) &&
+-                task.hostId === ref.hostId &&
+-                task.workspacePath === ref.workspacePath &&
+-                !task.deleted &&
+-                !task.archived,
+-            ),
++            !facts.some((task) => matchesTaskFact(task, ref) && !task.deleted && !task.archived),
+         )
+       )
+         throw new Error("task-group.task-unavailable");
+@@ -113,13 +124,7 @@ export function createTaskGroupService(options: {
+       const facts = await options.resolveTasks(parsed.tasks);
+       if (
+         parsed.placement &&
+-        !facts.some(
+-          (task) =>
+-            groupTaskKey(task) === groupTaskKey(parsed.placement!.task) &&
+-            task.hostId === parsed.placement!.task.hostId &&
+-            task.workspacePath === parsed.placement!.task.workspacePath &&
+-            !task.deleted,
+-        )
++        !facts.some((task) => matchesTaskFact(task, parsed.placement!.task) && !task.deleted)
+       )
+         throw new Error("task-group.created-task-unavailable");
+       const db = await options.database();
+diff --git a/packages/ui/src/Root.tsx b/packages/ui/src/Root.tsx
+index 39b1b2b1..6b2bb796 100644
+--- a/packages/ui/src/Root.tsx
++++ b/packages/ui/src/Root.tsx
+@@ -211,6 +211,7 @@ function RootInner({
+   initialWorkspaceAbsPath,
+   unavailableWorkspacePath,
+   initialWorkspaceIdentity,
++  localServerHostId,
+   initialWorkspacePurpose,
+   initialTaskId,
+   initialTaskDraft,
+@@ -720,6 +721,7 @@ function RootInner({
+     addTab,
+     activeWorkspacePath,
+     activeWorkspaceIdentity,
++    localServerHostId,
+     supportsSettings,
+     isDesktop,
+     allowOpenWorkspace,
+diff --git a/packages/ui/src/root/types.ts b/packages/ui/src/root/types.ts
+index 47db3109..a6638c6d 100644
+--- a/packages/ui/src/root/types.ts
++++ b/packages/ui/src/root/types.ts
+@@ -61,6 +61,8 @@ export interface RootProps {
+   initialWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose;
+   /** 桌面启动时精确 active 的本地 workspace 不可用；仅用于本次 renderer 生命周期。 */
+   unavailableWorkspacePath?: string;
++  /** standalone Web 当前服务器自身的 Host id；仅用于将 self-host 路由为浏览器本机。 */
++  localServerHostId?: string;
+   /** 初始 workspace 的身份隔离键，远程工作区需要透传 */
+   initialWorkspaceIdentity?: string;
+   /** 初始要打开的 task，从全局 task 列表进入时透传 */
+diff --git a/packages/ui/src/root/useRootWorkspaceActions.ts b/packages/ui/src/root/useRootWorkspaceActions.ts
+index f74ccf3c..0b32d350 100644
+--- a/packages/ui/src/root/useRootWorkspaceActions.ts
++++ b/packages/ui/src/root/useRootWorkspaceActions.ts
+@@ -92,6 +92,7 @@ export function useRootWorkspaceActions({
+   addTab,
+   activeWorkspacePath,
+   activeWorkspaceIdentity,
++  localServerHostId,
+   supportsSettings,
+   isDesktop = false,
+   allowOpenWorkspace,
+@@ -115,6 +116,7 @@ export function useRootWorkspaceActions({
+   addTab: TabStoreState["addTab"];
+   activeWorkspacePath: string | null;
+   activeWorkspaceIdentity: string | null;
++  localServerHostId?: string;
+   supportsSettings: boolean;
+   isDesktop?: boolean;
+   allowOpenWorkspace: NonNullable<RootProps["allowOpenWorkspace"]>;
+@@ -303,6 +305,8 @@ export function useRootWorkspaceActions({
+           typeof request === "string"
+             ? undefined
+             : (request?.hostId ?? request?.targetWorkspace?.hostId);
++        let localServerTarget = Boolean(hostId && hostId === localServerHostId);
++        if (localServerTarget) hostId = "local";
+         const hasExplicitProject =
+           typeof request === "object" &&
+           request !== null &&
+@@ -322,9 +326,15 @@ export function useRootWorkspaceActions({
+         if (!hasExplicitProject && newTaskTarget) {
+           // 原因：仅远程继承项目会让本地快捷键落入未归类。按任务完整身份读取归属，不能由 cwd 猜项目。
+           if (newTaskTarget.workspaceIdentity) {
+-            hostId =
+-              remoteHostIdFromWorkspaceIdentity(newTaskTarget.workspaceIdentity) ?? undefined;
++            const identityHostId = remoteHostIdFromWorkspaceIdentity(
++              newTaskTarget.workspaceIdentity,
++            );
++            hostId = identityHostId ?? undefined;
+             if (!hostId) throw new Error("project.host-identity-required");
++            if (hostId === localServerHostId) {
++              localServerTarget = true;
++              hostId = "local";
++            }
+           }
+           const workspace = useZCodeSessionStore
+             .getState()
+@@ -352,7 +362,9 @@ export function useRootWorkspaceActions({
+             if (
+               !projects.some(
+                 (project) =>
+-                  project.id === projectId && project.hostId === "local" && !project.deleted,
++                  project.id === projectId &&
++                  (project.hostId === "local" || project.hostId === localServerHostId) &&
++                  !project.deleted,
+               )
+             ) {
+               logger.debug("[Root] 新任务不继承已删除的本地项目", { projectId });
+@@ -391,11 +403,18 @@ export function useRootWorkspaceActions({
+             : {}),
+         });
+         if (!isCurrent()) return;
++        const targetWorkspaceIdentity =
++          target.workspaceIdentity ??
++          (localServerTarget &&
++          (newTaskTarget?.workspacePath ?? activeWorkspacePath) === target.workspacePath
++            ? (newTaskTarget?.workspaceIdentity ?? activeWorkspaceIdentity ?? undefined)
++            : undefined);
+         if (hostId && hostId !== "local") {
+-          if (!target.workspaceIdentity || !openRemoteProjectWorkspace)
++          if (!targetWorkspaceIdentity || !openRemoteProjectWorkspace)
+             throw new Error("project.remote-navigation-unavailable");
+           await openRemoteProjectWorkspace({
+             ...target,
++            ...(targetWorkspaceIdentity ? { workspaceIdentity: targetWorkspaceIdentity } : {}),
+             hostId,
+             isCurrent,
+             ...(typeof request === "object" && request.remoteProjectMembershipId
+@@ -407,9 +426,9 @@ export function useRootWorkspaceActions({
+         if (!hostId || hostId === "local")
+           addTab(target.workspacePath, {
+             workspacePurpose: target.projectId ? "project" : "conversation",
+-            ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
++            ...(targetWorkspaceIdentity ? { workspaceIdentity: targetWorkspaceIdentity } : {}),
+           });
+-        startDraftInWorkspace(target.workspacePath, target.workspaceIdentity, {
++        startDraftInWorkspace(target.workspacePath, targetWorkspaceIdentity, {
+           ...(typeof request === "string" ? { provider: request } : request),
+           ...(pendingDraft ? { draftId: pendingDraft.draftId } : {}),
+           projectId: target.projectId,
+@@ -449,6 +468,7 @@ export function useRootWorkspaceActions({
+       composerClientNamespace,
+       activeWorkspacePath,
+       activeWorkspaceIdentity,
++      localServerHostId,
+       tabStoreApi,
+       addTab,
+       openMobileProjectDraft,
+diff --git a/packages/web/src/main.tsx b/packages/web/src/main.tsx
+index c67f7668..4745fa7e 100644
+--- a/packages/web/src/main.tsx
++++ b/packages/web/src/main.tsx
+@@ -8,7 +8,11 @@ import "core-js/stable/array/to-sorted";
+ import "core-js/stable/array/to-reversed";
+ import "core-js/stable/object/group-by";
+ import { createWebPlatform } from "#src/platform/index.js";
+-import { mobilePluginDiscoveryTelemetrySchema } from "@zcode/shared";
++import {
++  mobilePluginDiscoveryTelemetrySchema,
++  buildServerRemoteWorkspaceIdentity,
++  remoteHostIdFromWorkspaceIdentity,
++} from "@zcode/shared";
+ import {
+   sessionCreateTelemetrySchema,
+   WEB_REMOTE_CONTROL_WORKSPACE_RECONNECT_TIMEOUT_MS,
+@@ -242,6 +246,7 @@ window.addEventListener("beforeunload", () => {
+ 
+ interface WebBootstrapResult {
+   wsUrl: string;
++  localServerHostId?: string;
+   initialWorkspaceAbsPath?: string;
+   initialWorkspaceIdentity?: string;
+   initialTaskId?: string;
+@@ -471,8 +476,18 @@ async function resolveWebBootstrap(): Promise<WebBootstrapResult> {
+     }
+     const serverInfo = (await response.json()) as Partial<ServerRemoteInfo>;
+     const workspace = Array.isArray(serverInfo.workspaces) ? serverInfo.workspaces[0] : undefined;
++    const localServerHostId =
++      typeof serverInfo.serverId === "string"
++        ? (remoteHostIdFromWorkspaceIdentity(
++            buildServerRemoteWorkspaceIdentity({
++              serverId: serverInfo.serverId,
++              workspacePath: "/",
++            }),
++          ) ?? undefined)
++        : undefined;
+     return {
+       wsUrl,
++      ...(localServerHostId ? { localServerHostId } : {}),
+       ...(workspace?.path ? { initialWorkspaceAbsPath: workspace.path } : {}),
+       ...(workspace?.workspaceIdentity
+         ? { initialWorkspaceIdentity: workspace.workspaceIdentity }
+@@ -1883,6 +1898,7 @@ async function bootstrapWebApp() {
+             services={services}
+             platform={platform}
+             initialWorkspaceAbsPath={bootstrap.initialWorkspaceAbsPath}
++            localServerHostId={bootstrap.localServerHostId}
+             initialWorkspaceIdentity={bootstrap.initialWorkspaceIdentity}
+             initialTaskId={bootstrap.initialTaskId}
+             restoreSession={bootstrap.restoreSession}

@@ -101,5 +101,27 @@ docker compose down          # volume vẫn còn
 
 ## Patch chế độ thuần trình duyệt
 
-Upstream cố tình không cho server standalone làm "local host" — sidebar duyệt file/tạo project trên web sẽ báo `project.host-offline` / `project.remote-project-required`. Image này build kèm [patches/standalone-web-local-host.patch](patches/standalone-web-local-host.patch): `hostId="local"` từ browser được quy về chính server → duyệt目录/tạo project/chạy phiên hoạt động bình thường; chế độ remote-control của desktop không đổi. Đã verify bằng unit test 5/5 trên `createProjectService` upstream.
+Upstream cố tình không cho server standalone làm "local host". Docker build tự áp dụng `patches/*.patch` theo thứ tự:
+
+- [standalone-web-local-host.patch](patches/standalone-web-local-host.patch): chuẩn hóa `hostId="local"` của browser về server sở hữu, hỗ trợ duyệt thư mục và tạo project.
+- [standalone-web-self-host-identity.patch](patches/standalone-web-self-host-identity.patch): nhận diện chính server là local để tránh `project.remote-navigation-unavailable`; task-group xử lý được alias `local`/`ownerHostId` và task thiếu `workspaceIdentity`, khắc phục toast chung “Group action failed”. Remote-control trên desktop giữ nguyên.
+
+Để áp patch mới trên máy chạy Docker, tại thư mục repo phải chạy `docker compose up -d --build`.
+**Chỉ `docker compose up -d` sẽ không dựng lại image** — log vẫn ra version cũ, stack offset cũ, triệu chứng y nguyên (đây là bẫy hay gặp nhất).
+
+Patch áp theo ngữ cảnh dòng, upstream chỉ cần đổi file (thêm một import ở đầu file cũng đủ) là `patch does not apply` và cả build image fail. Vì vậy luôn kiểm trên bản checkout sạch:
+
+```bash
+git clone --depth 1 https://github.com/zai-org/ZCode.git /tmp/zcsrc && cd /tmp/zcsrc
+for p in /root/zcode-web-docker/patches/*.patch; do git apply -v "$p"; done
+pnpm install --no-frozen-lockfile
+./node_modules/.bin/tsc -b packages/shared packages/rpc packages/provider packages/provider-node \
+  packages/design-runtime packages/services packages/client packages/server packages/ui packages/web
+pnpm --filter @zcode/web build && pnpm --filter @zcode/server build
+./node_modules/.bin/tsx /root/zcode-web-docker/verification/project-service.check.mjs /tmp/zcsrc
+./node_modules/.bin/tsx /root/zcode-web-docker/verification/local-host-id.check.mjs /tmp/zcsrc
+```
+
+`project-service.check.mjs` cố ý giữ một case **phải fail** (`prepareSession` không có `hostId` vẫn báo
+`project.remote-project-required`) để chắc chắn ngữ nghĩa remote-entry không bị nới.
 

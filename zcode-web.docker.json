@@ -88,8 +88,19 @@
     "notVerified": "docker build 本身与 HEALTHCHECK（本沙箱无 docker）；容器内始终 root"
   },
   "patch": {
-    "file": "patches/standalone-web-local-host.patch",
-    "purpose": "纯浏览器模式可用:hostId=local 归一到服务器自身——①project service route() 路由归一(浏览目录);②saveProject 归一+放行浏览器 reuseExistingRoot(创建/复用 project);③repository 复用守卫对 owner host 例外(host-immutable 修复);④prepareSession 对显式 local 放行草稿;草稿目录优先 ZCODE_SERVER_WORKSPACE。vitest 8/8(先复现 host-offline/remote-project-required/host-immutable 再全绿)。",
-    "verified": "vitest 单测 5/5(对真实 createProjectService):before 复现 host-offline/remote-project-required,after 全绿;entry-http 重建后本地 boot server-info OK;channel mapper 只改 workspace identity,不改 hostId"
+    "files": [
+      "patches/standalone-web-local-host.patch",
+      "patches/standalone-web-self-host-identity.patch"
+    ],
+    "order": "Dockerfile 里 for p in /tmp/zcode-patches/*.patch 按文件名顺序应用:local-host 先,self-host-identity 后",
+    "purpose": "纯浏览器模式可用: ①hostId=local 归一到 ownerHostId(读目录/建项目/prepareSession 放行); ②Web 端从 /api/server-info 的 serverId 派生 localServerHostId,把 self-host 路由当本机(消除 project.remote-navigation-unavailable); ③task-group 兼容 local/ownerHostId 别名与缺失 workspaceIdentity 的任务",
+    "verified": {
+      "applyOrder": "干净 clone zai-org/ZCode main(3.18.2, fec9759)上按顺序 git apply -v 两个补丁全部 cleanly,结果与已验证 tree 的 diff 字节一致",
+      "typecheck": "tsc -b shared/rpc/provider/provider-node/design-runtime/services/client/server/ui/web => exit 0",
+      "build": "pnpm --filter @zcode/web build 与 @zcode/server build => exit 0; bundle 内含 localServerHostId",
+      "behavior": "verification/project-service.check.mjs: patch 前 7 项失败(host-offline/invalid-directory-open),patch 后仅剩 1 项'必须失败'的 remote 语义用例; verification/local-host-id.check.mjs: 4 个 serverId 派生一致,空 serverId 被拒",
+      "notVerified": "未跑容器/浏览器 smoke test(构建机无 docker daemon);CI 的单平台非 push 构建会自动跑 smoke"
+    },
+    "regenerate": "改了补丁就在干净上游检出里重新 git apply,再 git diff 生成;注意第二个补丁不要重复包含第一个补丁已改的 hunk(同一个文件中相邻 hunk 会互相冲突)"
   }
 }

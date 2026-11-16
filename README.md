@@ -77,13 +77,38 @@ gh workflow run build-image -f platforms=linux/amd64,linux/arm64 -f push_image=t
 
 ## 纯浏览器模式补丁
 
-上游 standalone server 有意不做 "local host"(浏览器里 sidebar 的文件树/新建 project 会报
-`project.host-offline` / `project.remote-project-required`,完整流程期望桌面客户端连入当 host)。
-本镜像在构建时应用 [patches/standalone-web-local-host.patch](patches/standalone-web-local-host.patch):
+上游 standalone server 有意不做 "local host"（浏览器里的 sidebar/新建 project 默认假设桌面 host）。镜像构建会按顺序应用 `patches/*.patch`：
 
-- project service 把浏览器发来的 `hostId="local"` 归一到服务器自身身份 → 纯浏览器可浏览目录、创建 project、发起会话;
-- `prepareSession` 对显式 `hostId="local"` 的请求放行(草稿目录落在 `ZCODE_SERVER_WORKSPACE`);
-- 桌面远控语义不变:未带 hostId 的远端入口仍被拒绝,未知 host 仍报 `host-offline`。
+- [standalone-web-local-host.patch](patches/standalone-web-local-host.patch)：把浏览器 `hostId="local"` 归一到服务器自身身份，支持目录浏览和项目创建。
+- [standalone-web-self-host-identity.patch](patches/standalone-web-self-host-identity.patch)：让 Web 把当前 server Host 作为本机处理，避免 `project.remote-navigation-unavailable`；分组服务兼容 `local`/`ownerHostId` 以及缺失 `workspaceIdentity` 的任务，避免通用的“Group action failed”提示。
+- 桌面远控入口和未知远端 Host 的处理保持原语义。
 
-已用 upstream 的 `createProjectService` 写单测验证(patch 前复现两个错误,patch 后 5/5 通过)。
+修改后在部署机的仓库目录执行 `docker compose up -d --build` 重建并启动；**只 `docker compose up -d` 不会重建镜像**，
+日志里会出现旧版本号、旧 stack offset，症状依旧（这是最常踩的坑）。
+
+### 补丁验证（可复跑）
+
+补丁按行上下文应用，上游一改文件（哪怕只是文件头部多一个 import）就会 `patch does not apply`，
+整个镜像构建随之失败。因此每次动补丁前后都应在干净的上游检出上验证：
+
+```bash
+# 1) 在干净的上游检出上按顺序应用
+git clone --depth 1 https://github.com/zai-org/ZCode.git /tmp/zcsrc
+cd /tmp/zcsrc
+for p in /root/zcode-web-docker/patches/*.patch; do git apply -v "$p"; done
+
+# 2) 类型 + 构建
+pnpm install --no-frozen-lockfile
+./node_modules/.bin/tsc -b packages/shared packages/rpc packages/provider \
+  packages/provider-node packages/design-runtime packages/services packages/client \
+  packages/server packages/ui packages/web
+pnpm --filter @zcode/web build && pnpm --filter @zcode/server build
+
+# 3) 行为回归:patch 前应复现 host-offline / invalid-directory-open,应用后全绿
+./node_modules/.bin/tsx /root/zcode-web-docker/verification/project-service.check.mjs /tmp/zcsrc
+./node_modules/.bin/tsx /root/zcode-web-docker/verification/local-host-id.check.mjs /tmp/zcsrc
+```
+
+`project-service.check.mjs` 会保留一项“必须失败”的用例（不带 `hostId` 的 `prepareSession`
+仍应报 `project.remote-project-required`），用来确认远端入口语义没被放宽。
 
